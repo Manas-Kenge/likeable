@@ -1,0 +1,39 @@
+{
+  "name": "backend",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun run --watch index.ts",
+    "start": "bun run index.ts",
+    "create-template": "bun run src/create-template.ts",
+    "e2b:build:dev": "cd lovable-clone && npx tsx build.dev.ts",
+    "e2b:build:prod": "cd lovable-clone && npx tsx build.prod.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
+    "@types/uuid": "^11.0.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@ai-sdk/langchain": "^1.0.93",
+    "@e2b/cli": "^2.4.2",
+    "@e2b/code-interpreter": "^2.2.0",
+    "@langchain/core": "^1.0.4",
+    "@langchain/google-genai": "^2.0.0",
+    "@langchain/langgraph": "^1.0.2",
+    "ai": "^5.0.93",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "e2b": "^2.7.0",
+    "express": "^5.1.0",
+    "langchain": "^1.0.4",
+    "langsmith": "^0.3.82",
+    "uuid": "^13.0.0",
+    "zod": "^4.1.12"
+  }
+}

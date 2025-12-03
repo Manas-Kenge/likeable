@@ -16,7 +16,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon } from "lucide-react";
 import type { ComponentProps, ReactNode } from "react";
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, forwardRef, useContext, useEffect, useState } from "react";
 
 export type WebPreviewContextValue = {
   url: string;
@@ -169,27 +169,27 @@ export type WebPreviewBodyProps = ComponentProps<"iframe"> & {
   loading?: ReactNode;
 };
 
-export const WebPreviewBody = ({
-  className,
-  loading,
-  src,
-  ...props
-}: WebPreviewBodyProps) => {
-  const { url } = useWebPreview();
+export const WebPreviewBody = forwardRef<HTMLIFrameElement, WebPreviewBodyProps>(
+  ({ className, loading, src, ...props }, ref) => {
+    const { url } = useWebPreview();
 
-  return (
-    <div className="flex-1">
-      <iframe
-        className={cn("size-full", className)}
-        sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
-        src={(src ?? url) || undefined}
-        title="Preview"
-        {...props}
-      />
-      {loading}
-    </div>
-  );
-};
+    return (
+      <div className="flex-1">
+        <iframe
+          ref={ref}
+          className={cn("size-full", className)}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
+          src={(src ?? url) || undefined}
+          title="Preview"
+          {...props}
+        />
+        {loading}
+      </div>
+    );
+  }
+);
+
+WebPreviewBody.displayName = "WebPreviewBody";
 
 export type WebPreviewConsoleProps = ComponentProps<"div"> & {
   logs?: Array<{
