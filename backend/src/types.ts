@@ -13,6 +13,26 @@ export interface Project {
   status: "creating" | "running" | "stopped" | "error";
   files: string[];
   context: Record<string, unknown>;
+  messages: ChatMessage[];
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+  status?: "pending" | "streaming" | "complete" | "error";
+  changes?: FileChange[];
+  reasoning?: ReasoningStep[];
+}
+
+export interface ReasoningStep {
+  id: string;
+  type: "thinking" | "tool_call" | "tool_result" | "file_change";
+  status: "active" | "complete" | "pending";
+  label: string;
+  description?: string;
+  timestamp: string;
 }
 
 export interface CreateProjectRequest {

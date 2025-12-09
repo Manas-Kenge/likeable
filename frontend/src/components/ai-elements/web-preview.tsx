@@ -50,6 +50,11 @@ export const WebPreview = ({
   const [url, setUrl] = useState(defaultUrl);
   const [consoleOpen, setConsoleOpen] = useState(false);
 
+  // Sync URL when parent updates the default URL (e.g., after file changes)
+  useEffect(() => {
+    setUrl(defaultUrl);
+  }, [defaultUrl]);
+
   const handleUrlChange = (newUrl: string) => {
     setUrl(newUrl);
     onUrlChange?.(newUrl);

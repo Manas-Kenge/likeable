@@ -26,9 +26,9 @@ export interface FileChange {
 }
 
 export interface StreamEvent {
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'message' | 'file_change' | 'done' | 'error';
+  type: 'plan' | 'step' | 'files' | 'thinking' | 'tool_call' | 'tool_result' | 'message' | 'file_change' | 'done' | 'error';
   data: unknown;
-  timestamp: string;
+  timestamp?: string;
 }
 
 export interface FileNode {

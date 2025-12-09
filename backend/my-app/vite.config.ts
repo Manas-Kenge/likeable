@@ -1,7 +1,7 @@
-import path from "path"
-import tailwindcss from "@tailwindcss/vite"
-import react from "@vitejs/plugin-react"
-import { defineConfig } from "vite"
+import path from "path";
+import tailwindcss from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -17,9 +17,8 @@ export default defineConfig({
     port: 5173,
     allowedHosts: true,
 
-    // Disable HMR in sandbox to avoid WebSocket connection issues
-    // The preview will still work, just won't auto-refresh
-    hmr: false,
+    // Enable HMR for proper live preview
+    hmr: true,
 
     watch: {
       usePolling: true,
@@ -27,4 +26,4 @@ export default defineConfig({
       ignored: ["**/node_modules/**", "**/.git/**"],
     },
   },
-})
+});

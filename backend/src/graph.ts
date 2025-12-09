@@ -1,522 +1,341 @@
-import {
-  StateGraph,
-  START,
-  END,
-  Annotation,
-  MemorySaver,
-} from "@langchain/langgraph";
-import { ToolNode } from "@langchain/langgraph/prebuilt";
-import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
-import {
-  AIMessage,
-  HumanMessage,
-  SystemMessage,
-} from "@langchain/core/messages";
+import { StateGraph, START, END, Annotation } from "@langchain/langgraph";
+import { ChatAnthropic } from "@langchain/anthropic";
+import { HumanMessage, AIMessage, SystemMessage } from "@langchain/core/messages";
 import type { BaseMessage } from "@langchain/core/messages";
+import type { Sandbox } from "e2b";
+import type { RetryPolicy } from "@langchain/langgraph";
+import { prompt as systemPrompt, planPrompt, executePrompt } from "./prompt";
 
-import { tools } from "./tools";
-import { prompt } from "./prompt";
-
-// ============================================================================
-// STATE DEFINITION (Simplified)
-// ============================================================================
-
-interface FileChange {
-  path: string;
-  action: "create" | "update" | "delete";
+/** Recursively read all source files from sandbox */
+async function readSandboxFiles(sandbox: Sandbox, dir: string = "/home/user/app/src"): Promise<Record<string, string>> {
+  const files: Record<string, string> = {};
+  
+  try {
+    const entries = await sandbox.files.list(dir);
+    
+    for (const entry of entries) {
+      const fullPath = `${dir}/${entry.name}`;
+      
+      if (entry.type === "dir") {
+        // Recursively read subdirectories, but skip node_modules and other non-essential dirs
+        if (!["node_modules", ".git", "dist", "build"].includes(entry.name)) {
+          const subFiles = await readSandboxFiles(sandbox, fullPath);
+          Object.assign(files, subFiles);
+        }
+      } else if (entry.type === "file") {
+        // Only read source files we care about
+        if (entry.name.match(/\.(tsx?|css|json)$/) && !entry.name.includes(".d.ts")) {
+          try {
+            const content = await sandbox.files.read(fullPath);
+            // Store with relative path from app root
+            const relativePath = fullPath.replace("/home/user/app/", "");
+            files[relativePath] = content;
+          } catch (err) {
+            console.warn(`[readSandboxFiles] Failed to read ${fullPath}:`, err);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[readSandboxFiles] Failed to list ${dir}:`, err);
+  }
+  
+  return files;
 }
 
-/**
- * Simplified Lovable Agent State
- * Following "less is more" - only track what's essential
- */
-const LovableState = Annotation.Root({
-  // Conversation history
+// State with planning
+const State = Annotation.Root({
   messages: Annotation<BaseMessage[]>({
-    reducer: (current, update) => current.concat(update),
+    reducer: (curr, update) => curr.concat(update),
     default: () => [],
   }),
-
-  // Current user request
-  userRequest: Annotation<string>({
+  plan: Annotation<string[]>({
+    reducer: (_, update) => update,
+    default: () => [],
+  }),
+  currentStep: Annotation<number>({
+    reducer: (_, update) => update,
+    default: () => 0,
+  }),
+  files: Annotation<Record<string, string>>({
+    reducer: (curr, update) => ({ ...curr, ...update }),
+    default: () => ({}),
+  }),
+  originalRequest: Annotation<string>({
     reducer: (_, update) => update,
     default: () => "",
   }),
-
-  // Is this the first message?
-  isFirstMessage: Annotation<boolean>({
-    reducer: (_, update) => update,
-    default: () => true,
-  }),
-
-  // Files changed during this session
-  changedFiles: Annotation<FileChange[]>({
-    reducer: (current, update) => [...current, ...update],
-    default: () => [],
-  }),
 });
 
-type LovableStateType = typeof LovableState.State;
+type StateType = typeof State.State;
 
-// ============================================================================
-// LLM SETUP
-// ============================================================================
+const parseJSON = (text: string) => {
+  // First try to extract from markdown code block
+  const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (codeBlockMatch) {
+    try {
+      return JSON.parse(codeBlockMatch[1].trim());
+    } catch {}
+  }
 
-const llm = new ChatGoogleGenerativeAI({
-  model: "gemini-2.0-flash",  // Use stable model that works well with tool calling
-  temperature: 0.7,
-  maxRetries: 2,
-  // Relax safety settings to avoid blocking code generation requests
-  safetySettings: [
-    {
-      category: "HARM_CATEGORY_HARASSMENT",
-      threshold: "BLOCK_ONLY_HIGH",
-    },
-    {
-      category: "HARM_CATEGORY_HATE_SPEECH",
-      threshold: "BLOCK_ONLY_HIGH",
-    },
-    {
-      category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-      threshold: "BLOCK_ONLY_HIGH",
-    },
-    {
-      category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-      threshold: "BLOCK_ONLY_HIGH",
-    },
-  ],
-});
+  // Fallback to raw JSON extraction (objects or arrays)
+  const match = text.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+  try {
+    return match ? JSON.parse(match[0]) : null;
+  } catch {
+    return null;
+  }
+};
 
-const llmWithTools = llm.bindTools(tools);
+export function createPlanningAgent(sandbox: Sandbox) {
+  const llm = new ChatAnthropic({
+    model: "claude-haiku-4-5-20251001",
+    apiKey: process.env.ANTHROPIC_API_KEY,
+    temperature: 0,
+    maxRetries: 2,
+  });
 
-// ============================================================================
-// NODE: AGENT
-// Single node that handles the entire implementation with tool calling
-// This is the ReAct pattern - reason and act in a loop until done
-// ============================================================================
+  const retryPolicy: RetryPolicy = {
+    maxAttempts: 3,
+    initialInterval: 1.0,
+    backoffFactor: 2.0,
+  };
 
-async function agentNode(
-  state: LovableStateType
-): Promise<Partial<LovableStateType>> {
-  const { messages, userRequest, isFirstMessage, changedFiles } = state;
+  // Node 1: Create a plan
+  async function planNode(state: StateType, config?: any): Promise<Partial<StateType>> {
+    console.log(`[PlanNode] Creating plan for user message`);
 
-  // Build context about current state
-  const contextInfo =
-    changedFiles.length > 0
-      ? `\n\nFILES CHANGED SO FAR:\n${changedFiles
-          .map((f) => `- ${f.action}: ${f.path}`)
-          .join("\n")}`
+    // Extract original request from first human message
+    const originalRequest = state.messages.find(m => m._getType() === 'human')?.content as string || "";
+    console.log(`[PlanNode] Original request: ${originalRequest.substring(0, 100)}...`);
+
+    // Read existing files from sandbox to provide context
+    console.log(`[PlanNode] Reading existing files from sandbox...`);
+    const existingFiles = await readSandboxFiles(sandbox);
+    const fileList = Object.keys(existingFiles);
+    console.log(`[PlanNode] Found ${fileList.length} existing files:`, fileList);
+
+    // Build context about existing files for the LLM
+    const existingFilesContext = fileList.length > 0 
+      ? `\n\nExisting files in the project:\n${fileList.map(f => `- ${f}`).join("\n")}`
       : "";
 
-  const systemPrompt = `${prompt}
-
-PROJECT SETUP:
-- This is a Vite + React + TailwindCSS + shadcn/ui project
-- The project is already set up with all dependencies installed
-- Files are located in /home/user/app/
-- Use relative paths like 'src/App.tsx' when using tools
-${
-  isFirstMessage
-    ? "\nThis is the FIRST message - create the initial application structure."
-    : ""
-}
-${contextInfo}
-
-IMPORTANT:
-- Use the tools to create/update files as needed
-- When you're done implementing, respond with a brief summary (no more tool calls)
-- Keep responses concise
-- Do NOT create unnecessary files - focus on what the user asked for`;
-
-  console.log("[agentNode] Invoking LLM with", messages.length, "messages");
-  console.log("[agentNode] System prompt length:", systemPrompt.length);
-  console.log("[agentNode] isFirstMessage:", isFirstMessage);
-
-  try {
-    const response = await llmWithTools.invoke([
-      new SystemMessage(systemPrompt),
-      ...messages,
+    const response = await llm.invoke([
+      new SystemMessage(`${systemPrompt}\n\n${planPrompt}${existingFilesContext}`),
+      ...state.messages,
     ]);
 
-    console.log("[agentNode] LLM Response received");
-    console.log("[agentNode] Response type:", response.constructor.name);
-    console.log(
-      "[agentNode] Has tool_calls:",
-      !!(response.tool_calls && response.tool_calls.length > 0)
-    );
-    if (response.tool_calls && response.tool_calls.length > 0) {
-      console.log(
-        "[agentNode] Tool calls:",
-        response.tool_calls.map((tc) => tc.name)
-      );
-    }
-    console.log(
-      "[agentNode] Content preview:",
-      typeof response.content === "string"
-        ? response.content.substring(0, 200) + "..."
-        : "non-string content"
-    );
+    console.log(`[PlanNode] LLM response:`, response.content);
+
+    const plan = parseJSON(response.content as string) || [];
+    console.log(`[PlanNode] Parsed plan with ${plan.length} steps:`, plan);
+
+    config?.writer?.({ type: "plan", data: plan });
 
     return {
-      messages: [response],
+      plan,
+      currentStep: 0,
+      originalRequest,
+      files: existingFiles, // Initialize state with existing files
+      messages: [new AIMessage(`Plan: ${plan.length} steps`)],
     };
-  } catch (error) {
-    // Handle Gemini safety filter or other API errors
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error("[agentNode] LLM invocation error:", errorMessage);
-    console.error("[agentNode] Full error:", error);
+  }
 
-    // Check if it's a safety filter issue (candidateContent.parts undefined)
-    if (
-      errorMessage.includes("candidateContent") ||
-      errorMessage.includes("parts")
-    ) {
-      console.error(
-        "[agentNode] Detected safety filter / candidateContent error"
-      );
+  // Node 2: Execute current step
+  async function executeNode(state: StateType, config?: any): Promise<Partial<StateType>> {
+    const currentStepDesc = state.plan[state.currentStep];
+    if (!currentStepDesc) return { currentStep: state.currentStep + 1 };
+
+    console.log(`[ExecuteNode] Step ${state.currentStep + 1}: ${currentStepDesc}`);
+    config?.writer?.({ type: "step", data: { num: state.currentStep + 1, description: currentStepDesc } });
+
+    // Build file context - include contents of relevant files
+    const fileEntries = Object.entries(state.files);
+    let fileContext = "";
+    
+    if (fileEntries.length > 0) {
+      // Include file contents for context (limit to avoid token overflow)
+      const relevantFiles = fileEntries.slice(0, 15); // Limit to 15 most relevant files
+      fileContext = "\n\nExisting files and their contents:\n" + relevantFiles.map(([path, content]) => {
+        // Truncate very large files
+        const truncatedContent = content.length > 3000 
+          ? content.substring(0, 3000) + "\n... (truncated)"
+          : content;
+        return `--- ${path} ---\n${truncatedContent}`;
+      }).join("\n\n");
+    }
+
+    const response = await llm.invoke([
+      new SystemMessage(`${systemPrompt}\n\n${executePrompt}`),
+      new HumanMessage(`Execute this step: "${currentStepDesc}"${fileContext}`),
+    ]);
+
+    console.log(`[ExecuteNode] LLM response:`, response.content);
+
+    const ops = parseJSON(response.content as string);
+    console.log(`[ExecuteNode] Parsed operations:`, JSON.stringify(ops, null, 2));
+
+    const updates: Record<string, string> = {};
+
+    if (!ops || !ops.operations || ops.operations.length === 0) {
+      console.warn(`[ExecuteNode] No operations found in LLM response`);
       return {
-        messages: [
-          new AIMessage(
-            "I apologize, but I encountered an issue processing your request. Please try rephrasing your request or breaking it into smaller steps."
-          ),
-        ],
+        currentStep: state.currentStep + 1,
+        messages: [new AIMessage(`Step completed (no file operations): ${currentStepDesc}`)],
       };
     }
 
-    // For other errors, return a generic error message
-    return {
-      messages: [
-        new AIMessage(
-          `I encountered an error: ${errorMessage}. Please try again.`
-        ),
-      ],
-    };
-  }
-}
+    try {
+      for (const op of ops.operations) {
+        console.log(`[ExecuteNode] Processing operation:`, op.type, op.path);
 
-// ============================================================================
-// NODE: TOOLS
-// Executes tool calls and tracks file changes
-// ============================================================================
+        if (op.type === "write_file") {
+          const fullPath = `/home/user/app/${op.path}`;
+          console.log(`[ExecuteNode] Writing file to: ${fullPath}`);
+          console.log(`[ExecuteNode] Content length: ${(op.content || '').length} bytes`);
 
-const toolNode = new ToolNode(tools);
+          await sandbox.files.write(fullPath, op.content || '');
+          updates[op.path] = op.content || '';
 
-async function toolsNode(
-  state: LovableStateType
-): Promise<Partial<LovableStateType>> {
-  const lastMessage = state.messages[state.messages.length - 1] as AIMessage;
-
-  console.log("[toolsNode] Processing tool calls");
-  console.log(
-    "[toolsNode] Last message tool_calls:",
-    lastMessage.tool_calls?.length || 0
-  );
-
-  if (!lastMessage.tool_calls?.length) {
-    console.log("[toolsNode] No tool calls found, returning empty");
-    return {};
-  }
-
-  console.log(
-    "[toolsNode] Executing tools:",
-    lastMessage.tool_calls.map((tc) => tc.name)
-  );
-
-  // Execute tools
-  try {
-    const result = await toolNode.invoke({ messages: [lastMessage] });
-    console.log("[toolsNode] Tools executed successfully");
-    console.log("[toolsNode] Result messages:", result.messages?.length || 0);
-
-    // Track file changes
-    const newChanges: FileChange[] = [];
-    for (const tc of lastMessage.tool_calls) {
-      if (tc.name === "create_file") {
-        const args = tc.args as { location: string };
-        newChanges.push({ path: args.location, action: "create" });
-      } else if (tc.name === "update_file") {
-        const args = tc.args as { location: string };
-        newChanges.push({ path: args.location, action: "update" });
-      } else if (tc.name === "delete_file") {
-        const args = tc.args as { location: string };
-        newChanges.push({ path: args.location, action: "delete" });
-      } else if (tc.name === "write_multiple_files") {
-        const args = tc.args as { files: { path: string }[] };
-        for (const f of args.files) {
-          newChanges.push({ path: f.path, action: "create" });
+          console.log(`[ExecuteNode] Successfully wrote: ${op.path}`);
+          config?.writer?.({ type: "file_change", data: { path: op.path, action: "write" } });
+        } else if (op.type === "run_command") {
+          console.log(`[ExecuteNode] Running command: ${op.command}`);
+          await sandbox.commands.run(op.command, {
+            onStdout: (data: any) => {
+              console.log(`[ExecuteNode] stdout:`, data.line || data);
+              config?.writer?.({ type: "stdout", data: data.line || data });
+            },
+            onStderr: (data: any) => {
+              console.log(`[ExecuteNode] stderr:`, data.line || data);
+              config?.writer?.({ type: "stderr", data: data.line || data });
+            },
+          });
         }
       }
+
+      console.log(`[ExecuteNode] Completed with ${Object.keys(updates).length} file updates`);
+    } catch (error) {
+      console.error(`[ExecuteNode] Error during execution:`, error);
+      config?.writer?.({ type: "error", data: { step: currentStepDesc, error: String(error) } });
     }
 
     return {
-      messages: result.messages,
-      changedFiles: newChanges,
+      files: updates,
+      currentStep: state.currentStep + 1,
+      messages: [new AIMessage(`Done: ${currentStepDesc}`)],
     };
-  } catch (toolError) {
-    console.error("[toolsNode] Error executing tools:", toolError);
-    throw toolError;
-  }
-}
-
-// ============================================================================
-// ROUTING: Simple check - has tool calls or done?
-// ============================================================================
-
-function shouldContinue(state: LovableStateType): "tools" | "end" {
-  const lastMessage = state.messages[state.messages.length - 1];
-
-  // If the last message has tool calls, execute them
-  if (
-    lastMessage &&
-    "tool_calls" in lastMessage &&
-    Array.isArray(lastMessage.tool_calls) &&
-    lastMessage.tool_calls.length > 0
-  ) {
-    return "tools";
   }
 
-  // Otherwise, we're done
-  return "end";
-}
+  // Node 3: Reflect on progress
+  async function reflectNode(state: StateType): Promise<Partial<StateType>> {
+    console.log(`[ReflectNode] Reviewing progress: ${state.currentStep}/${state.plan.length} steps completed`);
+    console.log(`[ReflectNode] Files modified:`, Object.keys(state.files));
 
-// ============================================================================
-// GRAPH CONSTRUCTION
-// Simple ReAct loop: agent -> tools -> agent -> ... -> end
-// ============================================================================
+    // Auto-complete if all steps are done
+    if (state.currentStep >= state.plan.length) {
+      console.log(`[ReflectNode] All steps completed, marking as done`);
+      return {
+        messages: [new AIMessage(JSON.stringify({ done: true, message: "All tasks completed successfully" }))]
+      };
+    }
 
-function buildGraph() {
-  const workflow = new StateGraph(LovableState)
-    .addNode("agent", agentNode)
-    .addNode("tools", toolsNode)
-    .addEdge(START, "agent")
-    .addConditionalEdges("agent", shouldContinue, {
-      tools: "tools",
-      end: END,
-    })
-    .addEdge("tools", "agent");
+    const response = await llm.invoke([
+      new SystemMessage(`Review progress:
+- Completed ${state.currentStep}/${state.plan.length} steps
+- Files modified: ${Object.keys(state.files).join(", ") || "none"}
 
-  const checkpointer = new MemorySaver();
-  return workflow.compile({ checkpointer });
-}
+If all steps are complete, respond: {"done": true, "message": "All tasks completed"}
+If more work needed, respond: {"done": false, "message": "reason why"}
 
-export const graph = buildGraph();
+Respond with ONLY valid JSON, no markdown.`),
+      ...state.messages,
+    ]);
 
-// ============================================================================
-// STREAMING EVENT TYPES
-// ============================================================================
+    console.log(`[ReflectNode] LLM response:`, response.content);
+    return { messages: [response] };
+  }
 
-export interface StreamEvent {
-  type:
-    | "thinking"
-    | "tool_call"
-    | "tool_result"
-    | "message"
-    | "file_change"
-    | "done"
-    | "error";
-  data: unknown;
-  timestamp: string;
-}
+  // Build and return compiled graph
+  const workflow = new StateGraph(State)
+    .addNode("plan_node", planNode)
+    .addNode("execute_node", executeNode, { retryPolicy })
+    .addNode("reflect_node", reflectNode)
+    .addEdge(START, "plan_node")
+    .addEdge("plan_node", "execute_node")
+    .addConditionalEdges("execute_node", (s) => {
+      // Safety: max 20 steps to prevent infinite loops
+      if (s.currentStep >= 20) {
+        console.warn(`[Graph] Max steps (20) reached, forcing completion`);
+        return "reflect_node";
+      }
+      return s.currentStep >= s.plan.length ? "reflect_node" : "execute_node";
+    }, { execute_node: "execute_node", reflect_node: "reflect_node" })
+    .addConditionalEdges("reflect_node", (s) => {
+      const lastMsg = s.messages[s.messages.length - 1]?.content as string || "";
+      const done = lastMsg.includes('"done": true') || lastMsg.includes('"done":true');
+      console.log(`[Graph] Reflect routing: done=${done}`);
+      return done ? END : "execute_node";
+    }, { execute_node: "execute_node", [END]: END });
 
-// ============================================================================
-// CONVENIENCE FUNCTIONS
-// ============================================================================
+  return workflow.compile();
+  }
 
-/**
- * Start a new conversation or continue existing one
- */
-export async function chat(
-  userMessage: string,
-  threadId: string,
-  isFirstMessage: boolean = true
-) {
-  const config = {
-    configurable: { thread_id: threadId },
-    recursionLimit: 50, // Allow more iterations for complex tasks
+
+// Non-streaming chat - extract file changes from final state
+export async function chat(message: string, projectId: string, isFirstMessage: boolean, sandbox: Sandbox) {
+  const graph = createPlanningAgent(sandbox);
+  const result = await graph.invoke({ messages: [new HumanMessage(message)] });
+  return {
+    messages: result.messages || [],
+    changedFiles: Object.entries(result.files || {}).map(([path, content]) => ({
+      path,
+      action: "update" as const,
+      content: content as string,
+    })),
   };
-
-  const result = await graph.invoke(
-    {
-      messages: [new HumanMessage(userMessage)],
-      userRequest: userMessage,
-      isFirstMessage,
-    },
-    config
-  );
-
-  return result;
 }
 
-/**
- * Stream chat for real-time updates with detailed reasoning events
- */
-export async function* streamChat(
-  userMessage: string,
-  threadId: string,
-  isFirstMessage: boolean = true
-): AsyncGenerator<StreamEvent> {
-  const config = {
-    configurable: { thread_id: threadId },
-    recursionLimit: 50,
-  };
-
-  const now = () => new Date().toISOString();
-
-  // Emit initial thinking event
-  yield {
-    type: "thinking",
-    data: { step: "analyzing", message: "Analyzing your request..." },
-    timestamp: now(),
-  };
-
-  let stepCount = 0;
-  const allChangedFiles: FileChange[] = [];
+// Streaming chat using state updates from graph execution
+export async function* streamChat(message: string, projectId: string, isFirstMessage: boolean, sandbox: Sandbox) {
+  const graph = createPlanningAgent(sandbox);
 
   try {
+    console.log(`[StreamChat] Starting stream for project ${projectId}`);
     const stream = await graph.stream(
-      {
-        messages: [new HumanMessage(userMessage)],
-        userRequest: userMessage,
-        isFirstMessage,
-      },
-      { ...config, streamMode: "updates" }
+      { messages: [new HumanMessage(message)] },
+      { configurable: {} }
     );
 
     for await (const event of stream) {
-      stepCount++;
+      console.log(`[StreamChat] Event keys:`, Object.keys(event));
 
-      // Process agent node events
-      if ("agent" in event) {
-        const agentState = event.agent as Partial<LovableStateType>;
-        const messages = agentState.messages || [];
-
-        for (const msg of messages) {
-          if (msg instanceof AIMessage || (msg && "tool_calls" in msg)) {
-            const aiMsg = msg as AIMessage;
-
-            // Check for tool calls
-            if (aiMsg.tool_calls && aiMsg.tool_calls.length > 0) {
-              yield {
-                type: "thinking",
-                data: {
-                  step: "planning",
-                  message: `Planning ${aiMsg.tool_calls.length} action(s)...`,
-                },
-                timestamp: now(),
-              };
-
-              for (const tc of aiMsg.tool_calls) {
-                yield {
-                  type: "tool_call",
-                  data: {
-                    name: tc.name,
-                    args: tc.args,
-                    description: getToolDescription(tc.name, tc.args),
-                  },
-                  timestamp: now(),
-                };
-              }
-            } else if (typeof aiMsg.content === "string" && aiMsg.content) {
-              // Final message from agent
-              yield {
-                type: "message",
-                data: { content: aiMsg.content },
-                timestamp: now(),
-              };
-            }
-          }
-        }
+      // event is an object like { plan_node: {...}, execute_node: {...}, etc }
+      if (event.plan_node?.plan) {
+        console.log(`[StreamChat] Yielding plan with ${event.plan_node.plan.length} steps`);
+        yield { type: "plan", data: event.plan_node.plan };
       }
 
-      // Process tools node events
-      if ("tools" in event) {
-        const toolsState = event.tools as Partial<LovableStateType>;
+      if (event.execute_node?.currentStep !== undefined) {
+        console.log(`[StreamChat] Yielding step ${event.execute_node.currentStep}`);
+        yield { type: "step", data: { num: event.execute_node.currentStep } };
+      }
 
-        // Report file changes
-        if (toolsState.changedFiles && toolsState.changedFiles.length > 0) {
-          for (const change of toolsState.changedFiles) {
-            allChangedFiles.push(change);
-            yield {
-              type: "file_change",
-              data: change,
-              timestamp: now(),
-            };
-          }
-        }
+      if (event.execute_node?.files && Object.keys(event.execute_node.files).length > 0) {
+        const fileList = Object.keys(event.execute_node.files);
+        console.log(`[StreamChat] Yielding ${fileList.length} files:`, fileList);
+        yield { type: "files", data: fileList };
+      }
 
-        // Report tool results
-        const messages = toolsState.messages || [];
-        for (const msg of messages) {
-          if (msg && "name" in msg) {
-            yield {
-              type: "tool_result",
-              data: {
-                name: (msg as { name: string }).name,
-                success: true,
-              },
-              timestamp: now(),
-            };
-          }
-        }
+      if (event.reflect_node) {
+        console.log(`[StreamChat] Reflect node completed`);
       }
     }
 
-    // Emit done event with summary
-    yield {
-      type: "done",
-      data: {
-        totalSteps: stepCount,
-        changedFiles: allChangedFiles,
-      },
-      timestamp: now(),
-    };
+    console.log(`[StreamChat] Stream completed`);
+    yield { type: "done" };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    console.error("Stream chat error:", errorMessage);
-
-    // Emit error event
-    yield {
-      type: "error",
-      data: {
-        message:
-          errorMessage.includes("candidateContent") ||
-          errorMessage.includes("parts")
-            ? "I apologize, but I encountered an issue processing your request. Please try rephrasing your request or breaking it into smaller steps."
-            : `An error occurred: ${errorMessage}`,
-      },
-      timestamp: now(),
-    };
+    console.error(`[StreamChat] Error:`, error);
+    yield { type: "error", data: { message: error instanceof Error ? error.message : String(error) } };
   }
 }
-
-/**
- * Get a human-readable description of a tool call
- */
-function getToolDescription(
-  name: string,
-  args: Record<string, unknown>
-): string {
-  switch (name) {
-    case "create_file":
-      return `Creating file: ${args.location}`;
-    case "update_file":
-      return `Updating file: ${args.location}`;
-    case "delete_file":
-      return `Deleting file: ${args.location}`;
-    case "read_file":
-      return `Reading file: ${args.location}`;
-    case "list_directory":
-      return `Listing directory: ${args.path || "."}`;
-    case "search_files":
-      return `Searching for: ${args.query}`;
-    case "execute_command":
-      return `Running command: ${args.command}`;
-    case "write_multiple_files":
-      const files = args.files as { path: string }[] | undefined;
-      return `Creating ${files?.length || 0} files`;
-    default:
-      return `Executing: ${name}`;
-  }
-}
-
-export type { LovableStateType, FileChange };

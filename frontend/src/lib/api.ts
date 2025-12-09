@@ -17,6 +17,26 @@ export interface Project {
   status: "creating" | "running" | "stopped" | "error";
   files: string[];
   context: Record<string, unknown>;
+  messages: ChatMessage[];
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+  status?: "pending" | "streaming" | "complete" | "error";
+  changes?: FileChange[];
+  reasoning?: ReasoningStep[];
+}
+
+export interface ReasoningStep {
+  id: string;
+  type: "thinking" | "tool_call" | "tool_result" | "file_change";
+  status: "active" | "complete" | "pending";
+  label: string;
+  description?: string;
+  timestamp: string;
 }
 
 export interface CreateProjectRequest {
@@ -88,7 +108,9 @@ class ApiClient {
 
   // ==================== Project APIs ====================
 
-  async createProject(request: CreateProjectRequest): Promise<ApiResponse<Project>> {
+  async createProject(
+    request: CreateProjectRequest
+  ): Promise<ApiResponse<Project>> {
     return this.fetch<Project>("/project", {
       method: "POST",
       body: JSON.stringify(request),
@@ -149,17 +171,6 @@ class ApiClient {
         }
       }
     }
-  }
-
-  async resumeWithFeedback(
-    projectId: string,
-    feedback: "approve" | "request_changes" | "reject",
-    additionalFeedback?: string
-  ): Promise<ApiResponse<ChatResponse>> {
-    return this.fetch<ChatResponse>(`/project/${projectId}/chat/resume`, {
-      method: "POST",
-      body: JSON.stringify({ feedback, additionalFeedback }),
-    });
   }
 
   // ==================== File APIs ====================

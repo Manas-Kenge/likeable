@@ -40,7 +40,6 @@ export function useWorkspace(projectId?: string) {
 
     try {
       const streamGenerator = api.streamMessage(projectId, message);
-      let finalMessage = '';
       const allChanges: { path: string; action: 'create' | 'update' | 'delete' }[] = [];
       let chunkCount = 0;
 
@@ -51,17 +50,8 @@ export function useWorkspace(projectId?: string) {
           const event: StreamEvent = JSON.parse(chunk);
 
           switch (event.type) {
-            case 'thinking': {
-              const data = event.data as { step: string; message: string };
-              const reasoningStep: ReasoningStep = {
-                id: `reason-${++reasoningIdCounter.current}`,
-                type: 'thinking',
-                status: 'active',
-                label: data.message,
-                timestamp: new Date(event.timestamp),
-              };
-
-              // Use flushSync to ensure immediate DOM update
+            case 'plan': {
+              const plan = Array.isArray(event.data) ? event.data : [];
               flushSync(() => {
                 setState((prev) => ({
                   ...prev,
@@ -69,7 +59,13 @@ export function useWorkspace(projectId?: string) {
                     msg.id === assistantMessageId
                       ? {
                           ...msg,
-                          reasoning: [...(msg.reasoning || []), reasoningStep],
+                          reasoning: [{
+                            id: `reason-${++reasoningIdCounter.current}`,
+                            type: 'thinking',
+                            status: 'complete',
+                            label: `Planning ${plan.length} steps`,
+                            timestamp: new Date(),
+                          }],
                         }
                       : msg
                   ),
@@ -78,17 +74,9 @@ export function useWorkspace(projectId?: string) {
               break;
             }
 
-            case 'tool_call': {
-              const data = event.data as { name: string; description: string };
-              const reasoningStep: ReasoningStep = {
-                id: `reason-${++reasoningIdCounter.current}`,
-                type: 'tool_call',
-                status: 'active',
-                label: data.description,
-                description: `Tool: ${data.name}`,
-                timestamp: new Date(event.timestamp),
-              };
-
+            case 'step': {
+              const stepNum = (event.data as { num?: number; description?: string })?.num || 0;
+              const description = (event.data as { num?: number; description?: string })?.description || '';
               flushSync(() => {
                 setState((prev) => ({
                   ...prev,
@@ -96,7 +84,13 @@ export function useWorkspace(projectId?: string) {
                     msg.id === assistantMessageId
                       ? {
                           ...msg,
-                          reasoning: markPreviousComplete(msg.reasoning || [], reasoningStep),
+                          reasoning: markPreviousComplete(msg.reasoning || [], {
+                            id: `reason-${++reasoningIdCounter.current}`,
+                            type: 'tool_call',
+                            status: 'active',
+                            label: description || `Executing step ${stepNum}`,
+                            timestamp: new Date(),
+                          }),
                         }
                       : msg
                   ),
@@ -105,36 +99,11 @@ export function useWorkspace(projectId?: string) {
               break;
             }
 
-            case 'tool_result': {
-              flushSync(() => {
-                setState((prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? {
-                          ...msg,
-                          reasoning: (msg.reasoning || []).map((r, i, arr) =>
-                            i === arr.length - 1 ? { ...r, status: 'complete' as const } : r
-                          ),
-                        }
-                      : msg
-                  ),
-                }));
+            case 'files': {
+              const files = Array.isArray(event.data) ? event.data : [];
+              files.forEach((file) => {
+                allChanges.push({ path: file, action: 'update' });
               });
-              break;
-            }
-
-            case 'file_change': {
-              const data = event.data as { path: string; action: 'create' | 'update' | 'delete' };
-              allChanges.push(data);
-
-              const reasoningStep: ReasoningStep = {
-                id: `reason-${++reasoningIdCounter.current}`,
-                type: 'file_change',
-                status: 'complete',
-                label: `${data.action === 'create' ? 'Created' : data.action === 'update' ? 'Updated' : 'Deleted'}: ${data.path}`,
-                timestamp: new Date(event.timestamp),
-              };
 
               flushSync(() => {
                 setState((prev) => ({
@@ -144,18 +113,18 @@ export function useWorkspace(projectId?: string) {
                       ? {
                           ...msg,
                           changes: [...allChanges],
-                          reasoning: [...(msg.reasoning || []), reasoningStep],
+                          reasoning: [...(msg.reasoning || []), {
+                            id: `reason-${++reasoningIdCounter.current}`,
+                            type: 'file_change',
+                            status: 'complete',
+                            label: `Modified ${files.length} file(s)`,
+                            timestamp: new Date(),
+                          }],
                         }
                       : msg
                   ),
                 }));
               });
-              break;
-            }
-
-            case 'message': {
-              const data = event.data as { content: string };
-              finalMessage = data.content;
               break;
             }
 
@@ -167,7 +136,7 @@ export function useWorkspace(projectId?: string) {
                     msg.id === assistantMessageId
                       ? {
                           ...msg,
-                          content: finalMessage || 'Done!',
+                          content: 'Completed all tasks',
                           status: 'complete' as const,
                           changes: [...allChanges],
                           reasoning: (msg.reasoning || []).map((r) => ({
@@ -181,7 +150,7 @@ export function useWorkspace(projectId?: string) {
                 }));
               });
 
-              // Refresh file tree after changes
+              // Refresh file tree
               if (allChanges.length > 0) {
                 const filesRes = await api.getProjectFiles(projectId);
                 if (filesRes.success) {
@@ -189,6 +158,10 @@ export function useWorkspace(projectId?: string) {
                     setState((prev) => ({
                       ...prev,
                       files: buildFileTree(filesRes.data || []),
+                      // Bust cache so iframe reloads the updated app
+                      previewUrl: prev.project?.previewUrl
+                        ? `${prev.project.previewUrl}?t=${Date.now()}`
+                        : prev.previewUrl,
                     }));
                   });
                 }
@@ -197,7 +170,7 @@ export function useWorkspace(projectId?: string) {
             }
 
             case 'error': {
-              const data = event.data as { message: string };
+              const errMsg = (event.data as { message?: string })?.message || 'An error occurred';
               flushSync(() => {
                 setState((prev) => ({
                   ...prev,
@@ -205,7 +178,7 @@ export function useWorkspace(projectId?: string) {
                     msg.id === assistantMessageId
                       ? {
                           ...msg,
-                          content: data.message || 'An error occurred',
+                          content: errMsg,
                           status: 'error' as const,
                         }
                       : msg
@@ -229,7 +202,7 @@ export function useWorkspace(projectId?: string) {
             msg.id === assistantMessageId && msg.status === 'streaming'
               ? {
                   ...msg,
-                  content: finalMessage || msg.content || 'Done!',
+                  content: msg.content || 'Completed',
                   status: 'complete' as const,
                 }
               : msg
