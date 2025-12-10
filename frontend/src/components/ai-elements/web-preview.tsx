@@ -177,14 +177,16 @@ export type WebPreviewBodyProps = ComponentProps<"iframe"> & {
 export const WebPreviewBody = forwardRef<HTMLIFrameElement, WebPreviewBodyProps>(
   ({ className, loading, src, ...props }, ref) => {
     const { url } = useWebPreview();
+    const iframeSrc = (src ?? url) || undefined;
 
     return (
       <div className="flex-1">
         <iframe
+          key={iframeSrc}
           ref={ref}
           className={cn("size-full", className)}
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
-          src={(src ?? url) || undefined}
+          src={iframeSrc}
           title="Preview"
           {...props}
         />

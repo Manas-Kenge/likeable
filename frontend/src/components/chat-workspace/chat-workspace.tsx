@@ -55,6 +55,7 @@ export function ChatWorkspace({ projectId, className }: ChatWorkspaceProps) {
           selectedFile={selectedFile}
           previewUrl={previewUrl}
           activeTab={activeTab}
+          isLoading={isLoading}
           onTabChange={setActiveTab}
           onSelectFile={selectFile}
         />

@@ -9,13 +9,13 @@ import { prompt as systemPrompt, planPrompt, executePrompt } from "./prompt";
 /** Recursively read all source files from sandbox */
 async function readSandboxFiles(sandbox: Sandbox, dir: string = "/home/user/app/src"): Promise<Record<string, string>> {
   const files: Record<string, string> = {};
-  
+
   try {
     const entries = await sandbox.files.list(dir);
-    
+
     for (const entry of entries) {
       const fullPath = `${dir}/${entry.name}`;
-      
+
       if (entry.type === "dir") {
         // Recursively read subdirectories, but skip node_modules and other non-essential dirs
         if (!["node_modules", ".git", "dist", "build"].includes(entry.name)) {
@@ -39,7 +39,7 @@ async function readSandboxFiles(sandbox: Sandbox, dir: string = "/home/user/app/
   } catch (err) {
     console.warn(`[readSandboxFiles] Failed to list ${dir}:`, err);
   }
-  
+
   return files;
 }
 
@@ -72,7 +72,7 @@ type StateType = typeof State.State;
 const parseJSON = (text: string) => {
   // First try to extract from markdown code block
   const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (codeBlockMatch) {
+  if (codeBlockMatch && codeBlockMatch[1]) {
     try {
       return JSON.parse(codeBlockMatch[1].trim());
     } catch {}
@@ -104,6 +104,7 @@ export function createPlanningAgent(sandbox: Sandbox) {
   // Node 1: Create a plan
   async function planNode(state: StateType, config?: any): Promise<Partial<StateType>> {
     console.log(`[PlanNode] Creating plan for user message`);
+    config?.writer?.({ type: "thinking", data: { message: "Analyzing your request..." } });
 
     // Extract original request from first human message
     const originalRequest = state.messages.find(m => m._getType() === 'human')?.content as string || "";
@@ -116,7 +117,7 @@ export function createPlanningAgent(sandbox: Sandbox) {
     console.log(`[PlanNode] Found ${fileList.length} existing files:`, fileList);
 
     // Build context about existing files for the LLM
-    const existingFilesContext = fileList.length > 0 
+    const existingFilesContext = fileList.length > 0
       ? `\n\nExisting files in the project:\n${fileList.map(f => `- ${f}`).join("\n")}`
       : "";
 
@@ -147,18 +148,19 @@ export function createPlanningAgent(sandbox: Sandbox) {
     if (!currentStepDesc) return { currentStep: state.currentStep + 1 };
 
     console.log(`[ExecuteNode] Step ${state.currentStep + 1}: ${currentStepDesc}`);
-    config?.writer?.({ type: "step", data: { num: state.currentStep + 1, description: currentStepDesc } });
+    config?.writer?.({ type: "thinking", data: { message: currentStepDesc } });
+    config?.writer?.({ type: "step", data: { num: state.currentStep + 1, total: state.plan.length, description: currentStepDesc } });
 
     // Build file context - include contents of relevant files
     const fileEntries = Object.entries(state.files);
     let fileContext = "";
-    
+
     if (fileEntries.length > 0) {
       // Include file contents for context (limit to avoid token overflow)
       const relevantFiles = fileEntries.slice(0, 15); // Limit to 15 most relevant files
       fileContext = "\n\nExisting files and their contents:\n" + relevantFiles.map(([path, content]) => {
         // Truncate very large files
-        const truncatedContent = content.length > 3000 
+        const truncatedContent = content.length > 3000
           ? content.substring(0, 3000) + "\n... (truncated)"
           : content;
         return `--- ${path} ---\n${truncatedContent}`;
@@ -194,11 +196,14 @@ export function createPlanningAgent(sandbox: Sandbox) {
           console.log(`[ExecuteNode] Writing file to: ${fullPath}`);
           console.log(`[ExecuteNode] Content length: ${(op.content || '').length} bytes`);
 
+          // Emit file_start so frontend can show shimmer
+          config?.writer?.({ type: "file_start", data: { path: op.path } });
+
           await sandbox.files.write(fullPath, op.content || '');
           updates[op.path] = op.content || '';
 
           console.log(`[ExecuteNode] Successfully wrote: ${op.path}`);
-          config?.writer?.({ type: "file_change", data: { path: op.path, action: "write" } });
+          config?.writer?.({ type: "file_complete", data: { path: op.path, action: "write" } });
         } else if (op.type === "run_command") {
           console.log(`[ExecuteNode] Running command: ${op.command}`);
           await sandbox.commands.run(op.command, {

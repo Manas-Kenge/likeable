@@ -9,11 +9,206 @@ import React, {
   useState,
 } from "react"
 import * as AccordionPrimitive from "@radix-ui/react-accordion"
-import { FileIcon, FolderIcon, FolderOpenIcon } from "lucide-react"
+
+// React Icons imports
+import { 
+  SiTypescript, 
+  SiJavascript, 
+  SiReact, 
+  SiHtml5, 
+  SiCss3, 
+  SiJson,
+  SiMarkdown,
+  SiPython,
+  SiRuby,
+  SiGo,
+  SiRust,
+} from "react-icons/si"
+import { 
+  VscFile, 
+  VscFolder, 
+  VscFolderOpened,
+  VscSettingsGear,
+  VscLock,
+  VscFileMedia,
+  VscTerminalBash,
+} from "react-icons/vsc"
+import type { IconType } from "react-icons"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
+
+// Monokai color palette (matching the editor theme)
+const monokaiColors = {
+  background: '#272822',
+  backgroundAlt: '#1e1f1c',
+  foreground: '#f8f8f2',
+  comment: '#75715e',
+  red: '#f92672',
+  orange: '#fd971f',
+  yellow: '#e6db74',
+  green: '#a6e22e',
+  blue: '#66d9ef',
+  purple: '#ae81ff',
+  border: '#3e3d32',
+  selection: '#49483e',
+}
+
+// File icon configuration
+interface FileIconConfig {
+  icon: IconType
+  color: string
+}
+
+const getFileIcon = (filename: string): FileIconConfig => {
+  const ext = filename.split('.').pop()?.toLowerCase() || ''
+  const name = filename.toLowerCase()
+  
+  // Special file names
+  if (name === 'package.json' || name === 'tsconfig.json' || name === 'vite.config.ts') {
+    return { icon: VscSettingsGear, color: monokaiColors.comment }
+  }
+  if (name.includes('.lock') || name === 'yarn.lock' || name === 'package-lock.json') {
+    return { icon: VscLock, color: monokaiColors.comment }
+  }
+  if (name.startsWith('.env')) {
+    return { icon: VscSettingsGear, color: monokaiColors.yellow }
+  }
+  if (name === '.gitignore' || name === '.eslintrc' || name.includes('config')) {
+    return { icon: VscSettingsGear, color: monokaiColors.comment }
+  }
+  
+  // Extension-based icons
+  const iconMap: Record<string, FileIconConfig> = {
+    // TypeScript/JavaScript
+    ts: { icon: SiTypescript, color: monokaiColors.blue },
+    tsx: { icon: SiReact, color: monokaiColors.blue },
+    js: { icon: SiJavascript, color: monokaiColors.yellow },
+    jsx: { icon: SiReact, color: monokaiColors.blue },
+    mjs: { icon: SiJavascript, color: monokaiColors.yellow },
+    cjs: { icon: SiJavascript, color: monokaiColors.yellow },
+    
+    // Web
+    html: { icon: SiHtml5, color: monokaiColors.orange },
+    htm: { icon: SiHtml5, color: monokaiColors.orange },
+    css: { icon: SiCss3, color: monokaiColors.blue },
+    scss: { icon: SiCss3, color: monokaiColors.red },
+    sass: { icon: SiCss3, color: monokaiColors.red },
+    less: { icon: SiCss3, color: monokaiColors.blue },
+    
+    // Data
+    json: { icon: SiJson, color: monokaiColors.yellow },
+    yaml: { icon: VscSettingsGear, color: monokaiColors.red },
+    yml: { icon: VscSettingsGear, color: monokaiColors.red },
+    xml: { icon: VscFile, color: monokaiColors.orange },
+    
+    // Markdown
+    md: { icon: SiMarkdown, color: monokaiColors.foreground },
+    mdx: { icon: SiMarkdown, color: monokaiColors.blue },
+    
+    // Images
+    svg: { icon: VscFileMedia, color: monokaiColors.yellow },
+    png: { icon: VscFileMedia, color: monokaiColors.green },
+    jpg: { icon: VscFileMedia, color: monokaiColors.green },
+    jpeg: { icon: VscFileMedia, color: monokaiColors.green },
+    gif: { icon: VscFileMedia, color: monokaiColors.purple },
+    ico: { icon: VscFileMedia, color: monokaiColors.blue },
+    webp: { icon: VscFileMedia, color: monokaiColors.green },
+    
+    // Other languages
+    py: { icon: SiPython, color: monokaiColors.yellow },
+    rb: { icon: SiRuby, color: monokaiColors.red },
+    go: { icon: SiGo, color: monokaiColors.blue },
+    rs: { icon: SiRust, color: monokaiColors.orange },
+    java: { icon: VscFile, color: monokaiColors.orange },
+    
+    // Shell
+    sh: { icon: VscTerminalBash, color: monokaiColors.green },
+    bash: { icon: VscTerminalBash, color: monokaiColors.green },
+    zsh: { icon: VscTerminalBash, color: monokaiColors.green },
+    
+    // Text
+    txt: { icon: VscFile, color: monokaiColors.foreground },
+    log: { icon: VscFile, color: monokaiColors.comment },
+  }
+  
+  return iconMap[ext] || { icon: VscFile, color: monokaiColors.foreground }
+}
+
+// Folder color based on name
+const getFolderColor = (folderName?: string): string => {
+  if (!folderName) return monokaiColors.yellow
+  
+  const name = folderName.toLowerCase()
+  const folderColors: Record<string, string> = {
+    src: monokaiColors.blue,
+    source: monokaiColors.blue,
+    components: monokaiColors.green,
+    ui: monokaiColors.purple,
+    lib: monokaiColors.orange,
+    libs: monokaiColors.orange,
+    utils: monokaiColors.orange,
+    util: monokaiColors.orange,
+    helpers: monokaiColors.orange,
+    hooks: monokaiColors.blue,
+    hook: monokaiColors.blue,
+    api: monokaiColors.red,
+    apis: monokaiColors.red,
+    services: monokaiColors.red,
+    app: monokaiColors.green,
+    pages: monokaiColors.green,
+    views: monokaiColors.green,
+    public: monokaiColors.yellow,
+    static: monokaiColors.yellow,
+    assets: monokaiColors.yellow,
+    images: monokaiColors.green,
+    img: monokaiColors.green,
+    styles: monokaiColors.blue,
+    css: monokaiColors.blue,
+    types: monokaiColors.purple,
+    interfaces: monokaiColors.purple,
+    models: monokaiColors.purple,
+    config: monokaiColors.comment,
+    configs: monokaiColors.comment,
+    test: monokaiColors.yellow,
+    tests: monokaiColors.yellow,
+    __tests__: monokaiColors.yellow,
+    spec: monokaiColors.yellow,
+    node_modules: monokaiColors.comment,
+    dist: monokaiColors.comment,
+    build: monokaiColors.comment,
+    '.git': monokaiColors.comment,
+    '.next': monokaiColors.comment,
+    '.vscode': monokaiColors.blue,
+  }
+  
+  return folderColors[name] || monokaiColors.yellow
+}
+
+// File Icon Component
+interface FileTypeIconProps {
+  filename: string
+  className?: string
+}
+
+const FileTypeIcon = ({ filename, className }: FileTypeIconProps) => {
+  const { icon: Icon, color } = getFileIcon(filename)
+  return <Icon className={cn("size-4 flex-shrink-0", className)} style={{ color }} />
+}
+
+// Folder Icon Component
+interface FolderTypeIconProps {
+  isOpen: boolean
+  folderName?: string
+  className?: string
+}
+
+const FolderTypeIcon = ({ isOpen, folderName, className }: FolderTypeIconProps) => {
+  const color = getFolderColor(folderName)
+  const Icon = isOpen ? VscFolderOpened : VscFolder
+  return <Icon className={cn("size-4 flex-shrink-0", className)} style={{ color }} />
+}
 
 type TreeViewElement = {
   id: string
@@ -150,10 +345,16 @@ const Tree = forwardRef<HTMLDivElement, TreeViewProps>(
           direction,
         }}
       >
-        <div className={cn("size-full", className)}>
+        <div 
+          className={cn("size-full", className)}
+          style={{ 
+            backgroundColor: monokaiColors.backgroundAlt,
+            color: monokaiColors.foreground,
+          }}
+        >
           <ScrollArea
             ref={ref}
-            className="relative h-full px-2"
+            className="relative h-full px-2 py-2"
             dir={dir as Direction}
           >
             <AccordionPrimitive.Root
@@ -161,7 +362,7 @@ const Tree = forwardRef<HTMLDivElement, TreeViewProps>(
               type="multiple"
               defaultValue={expandedItems}
               value={expandedItems}
-              className="flex flex-col gap-1"
+              className="flex flex-col gap-0.5"
               onValueChange={(value) =>
                 setExpandedItems((prev) => [...(prev ?? []), value[0]])
               }
@@ -189,9 +390,12 @@ const TreeIndicator = forwardRef<
       dir={direction}
       ref={ref}
       className={cn(
-        "bg-muted absolute left-1.5 h-full w-px rounded-md py-3 duration-300 ease-in-out hover:bg-slate-300 rtl:right-1.5",
+        "absolute left-1.5 h-full w-px rounded-md py-3 duration-300 ease-in-out rtl:right-1.5",
         className
       )}
+      style={{ 
+        backgroundColor: monokaiColors.border,
+      }}
       {...props}
     />
   )
@@ -232,6 +436,8 @@ const Folder = forwardRef<
       closeIcon,
     } = useTree()
 
+    const isExpanded = expandedItems?.includes(value)
+
     return (
       <AccordionPrimitive.Item
         {...props}
@@ -240,28 +446,43 @@ const Folder = forwardRef<
       >
         <AccordionPrimitive.Trigger
           className={cn(
-            `flex items-center gap-1 rounded-md text-sm`,
+            "flex items-center gap-2 rounded-sm text-sm px-1.5 py-1 transition-colors w-full",
             className,
             {
-              "bg-muted rounded-md": isSelect && isSelectable,
               "cursor-pointer": isSelectable,
               "cursor-not-allowed opacity-50": !isSelectable,
             }
           )}
+          style={{
+            backgroundColor: isSelect && isSelectable ? monokaiColors.selection : 'transparent',
+            color: monokaiColors.foreground,
+          }}
+          onMouseEnter={(e) => {
+            if (isSelectable) {
+              e.currentTarget.style.backgroundColor = monokaiColors.selection
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (!(isSelect && isSelectable)) {
+              e.currentTarget.style.backgroundColor = 'transparent'
+            }
+          }}
           disabled={!isSelectable}
           onClick={() => handleExpand(value)}
         >
-          {expandedItems?.includes(value)
-            ? (openIcon ?? <FolderOpenIcon className="size-4" />)
-            : (closeIcon ?? <FolderIcon className="size-4" />)}
-          <span>{element}</span>
+          {openIcon && closeIcon ? (
+            isExpanded ? openIcon : closeIcon
+          ) : (
+            <FolderTypeIcon isOpen={!!isExpanded} folderName={element} />
+          )}
+          <span className="truncate">{element}</span>
         </AccordionPrimitive.Trigger>
         <AccordionPrimitive.Content className="data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down relative h-full overflow-hidden text-sm">
           {element && indicator && <TreeIndicator aria-hidden="true" />}
           <AccordionPrimitive.Root
             dir={direction}
             type="multiple"
-            className="ml-5 flex flex-col gap-1 py-1 rtl:mr-5"
+            className="ml-4 flex flex-col gap-0.5 py-0.5 rtl:mr-4"
             defaultValue={expandedItems}
             value={expandedItems}
             onValueChange={(value) => {
@@ -286,6 +507,7 @@ const File = forwardRef<
     isSelectable?: boolean
     isSelect?: boolean
     fileIcon?: React.ReactNode
+    fileName?: string
   } & React.ButtonHTMLAttributes<HTMLButtonElement>
 >(
   (
@@ -296,6 +518,7 @@ const File = forwardRef<
       isSelectable = true,
       isSelect,
       fileIcon,
+      fileName,
       children,
       ...props
     },
@@ -303,25 +526,40 @@ const File = forwardRef<
   ) => {
     const { direction, selectedId, selectItem } = useTree()
     const isSelected = isSelect ?? selectedId === value
+    
+    // Extract filename from value or children for icon
+    const displayName = fileName || (typeof children === 'string' ? children : value.split('/').pop() || value)
+    
     return (
       <button
         ref={ref}
         type="button"
         disabled={!isSelectable}
         className={cn(
-          "flex w-fit items-center gap-1 rounded-md pr-1 text-sm duration-200 ease-in-out rtl:pr-0 rtl:pl-1",
-          {
-            "bg-muted": isSelected && isSelectable,
-          },
+          "flex w-full items-center gap-2 rounded-sm px-1.5 py-1 text-sm transition-colors",
           isSelectable ? "cursor-pointer" : "cursor-not-allowed opacity-50",
           direction === "rtl" ? "rtl" : "ltr",
           className
         )}
+        style={{
+          backgroundColor: isSelected && isSelectable ? monokaiColors.selection : 'transparent',
+          color: monokaiColors.foreground,
+        }}
+        onMouseEnter={(e) => {
+          if (isSelectable) {
+            e.currentTarget.style.backgroundColor = monokaiColors.selection
+          }
+        }}
+        onMouseLeave={(e) => {
+          if (!(isSelected && isSelectable)) {
+            e.currentTarget.style.backgroundColor = 'transparent'
+          }
+        }}
         onClick={() => selectItem(value)}
         {...props}
       >
-        {fileIcon ?? <FileIcon className="size-4" />}
-        {children}
+        {fileIcon ?? <FileTypeIcon filename={displayName} />}
+        <span className="truncate">{children}</span>
       </button>
     )
   }
@@ -355,7 +593,6 @@ const CollapseButton = forwardRef<
   }, [])
 
   useEffect(() => {
-    console.log(expandAll)
     if (expandAll) {
       expendAllTree(elements)
     }
@@ -381,4 +618,4 @@ const CollapseButton = forwardRef<
 
 CollapseButton.displayName = "CollapseButton"
 
-export { CollapseButton, File, Folder, Tree, type TreeViewElement }
+export { CollapseButton, File, Folder, Tree, FileTypeIcon, FolderTypeIcon, monokaiColors, type TreeViewElement }

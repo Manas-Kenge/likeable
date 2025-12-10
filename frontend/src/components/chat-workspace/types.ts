@@ -12,10 +12,11 @@ export interface ChatMessage {
 
 export interface ReasoningStep {
   id: string;
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'file_change';
+  type: 'thinking' | 'tool_call' | 'tool_result' | 'file_change' | 'file_working';
   status: 'active' | 'complete' | 'pending';
   label: string;
   description?: string;
+  filePath?: string;
   timestamp: Date;
 }
 
@@ -26,7 +27,7 @@ export interface FileChange {
 }
 
 export interface StreamEvent {
-  type: 'plan' | 'step' | 'files' | 'thinking' | 'tool_call' | 'tool_result' | 'message' | 'file_change' | 'done' | 'error';
+  type: 'plan' | 'step' | 'files' | 'thinking' | 'tool_call' | 'tool_result' | 'message' | 'file_change' | 'file_start' | 'file_complete' | 'done' | 'error';
   data: unknown;
   timestamp?: string;
 }

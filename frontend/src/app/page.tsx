@@ -74,6 +74,8 @@ const NewChatPage = () => {
       });
 
       if (response.success && response.data) {
+        // Store prompt in sessionStorage for immediate display on chat page
+        sessionStorage.setItem('pendingPrompt', message.text);
         // Navigate to the chat page with the new project ID
         router.push(`/chat/${response.data.id}`);
       } else {
@@ -173,7 +175,7 @@ const NewChatPage = () => {
           {isLoadingProjects ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
               {[1, 2, 3].map((i) => (
-                <Card key={i} className="overflow-hidden">
+                <Card key={i} className="overflow-hidden w-full">
                   <Skeleton className="h-32 w-full" />
                   <CardContent className="p-4">
                     <Skeleton className="h-4 w-2/3 mb-2" />
@@ -182,42 +184,44 @@ const NewChatPage = () => {
                 </Card>
               ))}
             </div>
-          ) : projects.length === 0 ? (
+          ) : projects.filter((p) => p.status === 'running' || p.status === 'creating').length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               <p>No projects yet. Start by describing what you want to build!</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-              {projects.map((project) => (
-                <Card
-                  key={project.id}
-                  className="overflow-hidden hover:shadow-md transition cursor-pointer"
-                  onClick={() => handleProjectClick(project.id)}
-                >
-                  <div className="h-32 w-full bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center">
-                    <span className="text-4xl opacity-50">🚀</span>
-                  </div>
-                  <CardHeader className="pb-1">
-                    <CardTitle className="text-sm truncate">
-                      {project.name}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-muted-foreground text-xs">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={`h-2 w-2 rounded-full ${
-                          project.status === 'running'
-                            ? 'bg-green-500'
-                            : project.status === 'error'
-                            ? 'bg-red-500'
-                            : 'bg-yellow-500'
-                        }`}
-                      />
-                      <span className="capitalize">{project.status}</span>
+              {projects
+                .filter((project) => project.status === 'running' || project.status === 'creating')
+                .map((project) => (
+                  <Card
+                    key={project.id}
+                    className="overflow-hidden w-full hover:shadow-md transition cursor-pointer"
+                    onClick={() => handleProjectClick(project.id)}
+                  >
+                    <div className="h-32 w-full bg-gradient-to-br from-primary/10 to-primary/5 flex items-center justify-center">
+                      <span className="text-4xl opacity-50">🚀</span>
                     </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    <CardHeader className="pb-1">
+                      <CardTitle className="text-sm truncate">
+                        {project.name}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="text-muted-foreground text-xs">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`h-2 w-2 rounded-full ${
+                            project.status === 'running'
+                              ? 'bg-green-500'
+                              : project.status === 'error'
+                              ? 'bg-red-500'
+                              : 'bg-yellow-500'
+                          }`}
+                        />
+                        <span className="capitalize">{project.status}</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
             </div>
           )}
         </div>

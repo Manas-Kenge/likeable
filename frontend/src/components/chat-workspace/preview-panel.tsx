@@ -20,6 +20,7 @@ import {
   WebPreviewBody,
   WebPreviewConsole,
 } from "@/components/ai-elements/web-preview";
+import { MorphingText } from "@/components/ui/morphing-text";
 import { cn } from "@/lib/utils";
 import { FileExplorer } from "./file-explorer";
 import { CodeEditor } from "./code-editor";
@@ -30,10 +31,18 @@ interface PreviewPanelProps {
   selectedFile: FileNode | null;
   previewUrl: string | null;
   activeTab: PreviewTab;
+  isLoading?: boolean;
   onTabChange: (tab: PreviewTab) => void;
   onSelectFile: (file: FileNode) => void;
   className?: string;
 }
+
+const loadingTexts = [
+  "Building your app...",
+  "Writing code...",
+  "Creating components...",
+  "Almost there...",
+];
 
 type ConsoleLog = {
   level: "log" | "warn" | "error";
@@ -46,6 +55,7 @@ export function PreviewPanel({
   selectedFile,
   previewUrl,
   activeTab,
+  isLoading = false,
   onTabChange,
   onSelectFile,
   className,
@@ -113,7 +123,7 @@ export function PreviewPanel({
         {activeTab === "code" ? (
           <div className="flex h-full">
             {/* File explorer sidebar */}
-            <div className="w-64 border-r bg-muted/30">
+            <div className="w-64" style={{ borderRight: '1px solid #3e3d32' }}>
               <FileExplorer
                 files={files}
                 selectedFile={selectedFile}
@@ -187,10 +197,16 @@ export function PreviewPanel({
               </WebPreviewNavigationButton>
             </WebPreviewNavigation>
 
-            <WebPreviewBody
-              src={previewUrl || undefined}
-              ref={iframeRef}
-            />
+            {isLoading ? (
+              <div className="flex-1 flex items-center justify-center bg-background">
+                <MorphingText texts={loadingTexts} className="text-muted-foreground" />
+              </div>
+            ) : (
+              <WebPreviewBody
+                src={previewUrl || undefined}
+                ref={iframeRef}
+              />
+            )}
 
             <WebPreviewConsole logs={consoleLogs} />
           </WebPreview>

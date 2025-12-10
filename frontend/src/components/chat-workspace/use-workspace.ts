@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { flushSync } from 'react-dom';
 import { api } from '@/lib/api';
 import type {
   ChatMessage,
@@ -13,8 +12,54 @@ import type {
   StreamEvent,
 } from './types';
 
-export function useWorkspace(projectId?: string) {
-  const [state, setState] = useState<WorkspaceState>({
+// Helper to get initial state, checking sessionStorage for pending prompt
+function getInitialState(): WorkspaceState & { pendingPrompt: string | null } {
+  // Check for pending prompt from navigation (only on client)
+  const pendingPrompt = typeof window !== 'undefined'
+    ? sessionStorage.getItem('pendingPrompt')
+    : null;
+
+  if (pendingPrompt) {
+    // Clear it immediately to prevent re-use on refresh
+    sessionStorage.removeItem('pendingPrompt');
+
+    // Return initial state with user message + analyzing assistant message
+    return {
+      project: null,
+      messages: [
+        {
+          id: 'msg-pending-1',
+          role: 'user',
+          content: pendingPrompt,
+          timestamp: new Date(),
+          status: 'complete',
+        },
+        {
+          id: 'msg-pending-2',
+          role: 'assistant',
+          content: '',
+          timestamp: new Date(),
+          status: 'streaming',
+          reasoning: [{
+            id: 'reason-initial',
+            type: 'thinking',
+            status: 'active',
+            label: 'Analyzing your request...',
+            timestamp: new Date(),
+          }],
+        },
+      ],
+      files: [],
+      selectedFile: null,
+      activeTab: 'preview',
+      isLoading: true,
+      previewUrl: null,
+      pendingPrompt,
+    };
+  }
+
+  // Default empty state
+  return {
     project: null,
     messages: [],
     files: [],
@@ -22,11 +67,28 @@ export function useWorkspace(projectId?: string) {
     activeTab: 'preview',
     isLoading: false,
     previewUrl: null,
+    pendingPrompt: null,
+  };
+}
+
+export function useWorkspace(projectId?: string) {
+  // Use lazy initializer to check sessionStorage on first render
+  const [initialData] = useState(getInitialState);
+  const [state, setState] = useState<WorkspaceState>({
+    project: initialData.project,
+    messages: initialData.messages,
+    files: initialData.files,
+    selectedFile: initialData.selectedFile,
+    activeTab: initialData.activeTab,
+    isLoading: initialData.isLoading,
+    previewUrl: initialData.previewUrl,
   });
 
-  const messageIdCounter = useRef(0);
+  // Store pending prompt for use in loadProject
+  const pendingPromptRef = useRef<string | null>(initialData.pendingPrompt);
+  const messageIdCounter = useRef(10); // Start at 10 to avoid conflicts with pending messages
   const reasoningIdCounter = useRef(0);
-  const initialPromptProcessed = useRef(false);
+  const initialLoadStarted = useRef(false);
 
   // Process streaming response for a message
   const processStream = useCallback(async (
@@ -50,52 +112,121 @@ export function useWorkspace(projectId?: string) {
           const event: StreamEvent = JSON.parse(chunk);
 
           switch (event.type) {
+            case 'thinking': {
+              const thinkingData = event.data as { message?: string };
+              setState((prev) => ({
+                ...prev,
+                messages: prev.messages.map((msg) =>
+                  msg.id === assistantMessageId
+                    ? {
+                        ...msg,
+                        reasoning: markPreviousComplete(msg.reasoning || [], {
+                          id: `reason-${++reasoningIdCounter.current}`,
+                          type: 'thinking',
+                          status: 'active',
+                          label: thinkingData?.message || 'Thinking...',
+                          timestamp: new Date(),
+                        }),
+                      }
+                    : msg
+                ),
+              }));
+              break;
+            }
+
             case 'plan': {
               const plan = Array.isArray(event.data) ? event.data : [];
-              flushSync(() => {
-                setState((prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? {
-                          ...msg,
-                          reasoning: [{
-                            id: `reason-${++reasoningIdCounter.current}`,
-                            type: 'thinking',
-                            status: 'complete',
-                            label: `Planning ${plan.length} steps`,
-                            timestamp: new Date(),
-                          }],
-                        }
-                      : msg
-                  ),
-                }));
-              });
+              setState((prev) => ({
+                ...prev,
+                messages: prev.messages.map((msg) =>
+                  msg.id === assistantMessageId
+                    ? {
+                        ...msg,
+                        reasoning: markPreviousComplete(msg.reasoning || [], {
+                          id: `reason-${++reasoningIdCounter.current}`,
+                          type: 'thinking',
+                          status: 'complete',
+                          label: `Created ${plan.length} step plan`,
+                          description: plan.map((s, i) => `${i + 1}. ${s}`).join('\n'),
+                          timestamp: new Date(),
+                        }),
+                      }
+                    : msg
+                ),
+              }));
               break;
             }
 
             case 'step': {
-              const stepNum = (event.data as { num?: number; description?: string })?.num || 0;
-              const description = (event.data as { num?: number; description?: string })?.description || '';
-              flushSync(() => {
-                setState((prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? {
-                          ...msg,
-                          reasoning: markPreviousComplete(msg.reasoning || [], {
-                            id: `reason-${++reasoningIdCounter.current}`,
-                            type: 'tool_call',
-                            status: 'active',
-                            label: description || `Executing step ${stepNum}`,
-                            timestamp: new Date(),
-                          }),
-                        }
-                      : msg
-                  ),
-                }));
-              });
+              const stepData = event.data as { num?: number; total?: number; description?: string };
+              const stepNum = stepData?.num || 0;
+              const total = stepData?.total || stepNum;
+              const description = stepData?.description || '';
+              setState((prev) => ({
+                ...prev,
+                messages: prev.messages.map((msg) =>
+                  msg.id === assistantMessageId
+                    ? {
+                        ...msg,
+                        reasoning: markPreviousComplete(msg.reasoning || [], {
+                          id: `reason-${++reasoningIdCounter.current}`,
+                          type: 'tool_call',
+                          status: 'active',
+                          label: `Step ${stepNum}/${total}: ${description}`,
+                          timestamp: new Date(),
+                        }),
+                      }
+                    : msg
+                ),
+              }));
+              break;
+            }
+
+            case 'file_start': {
+              const fileData = event.data as { path?: string };
+              const filePath = fileData?.path || 'unknown';
+              setState((prev) => ({
+                ...prev,
+                messages: prev.messages.map((msg) =>
+                  msg.id === assistantMessageId
+                    ? {
+                        ...msg,
+                        reasoning: [...(msg.reasoning || []), {
+                          id: `reason-${++reasoningIdCounter.current}`,
+                          type: 'file_working',
+                          status: 'active',
+                          label: `Writing ${filePath}...`,
+                          filePath,
+                          timestamp: new Date(),
+                        }],
+                      }
+                    : msg
+                ),
+              }));
+              break;
+            }
+
+            case 'file_complete': {
+              const fileData = event.data as { path?: string; action?: string };
+              const filePath = fileData?.path || '';
+              allChanges.push({ path: filePath, action: 'update' });
+
+              setState((prev) => ({
+                ...prev,
+                messages: prev.messages.map((msg) =>
+                  msg.id === assistantMessageId
+                    ? {
+                        ...msg,
+                        changes: [...allChanges],
+                        reasoning: (msg.reasoning || []).map((r) =>
+                          r.filePath === filePath && r.type === 'file_working'
+                            ? { ...r, type: 'file_change' as const, status: 'complete' as const, label: `Updated ${filePath}` }
+                            : r
+                        ),
+                      }
+                    : msg
+                ),
+              }));
               break;
             }
 
@@ -104,66 +235,42 @@ export function useWorkspace(projectId?: string) {
               files.forEach((file) => {
                 allChanges.push({ path: file, action: 'update' });
               });
-
-              flushSync(() => {
-                setState((prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? {
-                          ...msg,
-                          changes: [...allChanges],
-                          reasoning: [...(msg.reasoning || []), {
-                            id: `reason-${++reasoningIdCounter.current}`,
-                            type: 'file_change',
-                            status: 'complete',
-                            label: `Modified ${files.length} file(s)`,
-                            timestamp: new Date(),
-                          }],
-                        }
-                      : msg
-                  ),
-                }));
-              });
+              // Don't add a separate reasoning step - file_start/file_complete handle it
               break;
             }
 
             case 'done': {
-              flushSync(() => {
-                setState((prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? {
-                          ...msg,
-                          content: 'Completed all tasks',
+              setState((prev) => ({
+                ...prev,
+                messages: prev.messages.map((msg) =>
+                  msg.id === assistantMessageId
+                    ? {
+                        ...msg,
+                        content: 'Completed all tasks',
+                        status: 'complete' as const,
+                        changes: [...allChanges],
+                        reasoning: (msg.reasoning || []).map((r) => ({
+                          ...r,
                           status: 'complete' as const,
-                          changes: [...allChanges],
-                          reasoning: (msg.reasoning || []).map((r) => ({
-                            ...r,
-                            status: 'complete' as const,
-                          })),
-                        }
-                      : msg
-                  ),
-                  isLoading: false,
-                }));
-              });
+                        })),
+                      }
+                    : msg
+                ),
+                isLoading: false,
+                // Force preview refresh with cache-busting timestamp
+                previewUrl: prev.project?.previewUrl
+                  ? `${prev.project.previewUrl.split('?')[0]}?t=${Date.now()}`
+                  : prev.previewUrl,
+              }));
 
-              // Refresh file tree
+              // Refresh file tree after changes
               if (allChanges.length > 0) {
                 const filesRes = await api.getProjectFiles(projectId);
                 if (filesRes.success) {
-                  flushSync(() => {
-                    setState((prev) => ({
-                      ...prev,
-                      files: buildFileTree(filesRes.data || []),
-                      // Bust cache so iframe reloads the updated app
-                      previewUrl: prev.project?.previewUrl
-                        ? `${prev.project.previewUrl}?t=${Date.now()}`
-                        : prev.previewUrl,
-                    }));
-                  });
+                  setState((prev) => ({
+                    ...prev,
+                    files: buildFileTree(filesRes.data || []),
+                  }));
                 }
               }
               break;
@@ -171,21 +278,19 @@ export function useWorkspace(projectId?: string) {
 
             case 'error': {
               const errMsg = (event.data as { message?: string })?.message || 'An error occurred';
-              flushSync(() => {
-                setState((prev) => ({
-                  ...prev,
-                  messages: prev.messages.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? {
-                          ...msg,
-                          content: errMsg,
-                          status: 'error' as const,
-                        }
-                      : msg
-                  ),
-                  isLoading: false,
-                }));
-              });
+              setState((prev) => ({
+                ...prev,
+                messages: prev.messages.map((msg) =>
+                  msg.id === assistantMessageId
+                    ? {
+                        ...msg,
+                        content: errMsg,
+                        status: 'error' as const,
+                      }
+                    : msg
+                ),
+                isLoading: false,
+              }));
               break;
             }
           }
@@ -195,45 +300,51 @@ export function useWorkspace(projectId?: string) {
       }
 
       // Ensure we mark as complete even if no done event
-      flushSync(() => {
-        setState((prev) => ({
-          ...prev,
-          messages: prev.messages.map((msg) =>
-            msg.id === assistantMessageId && msg.status === 'streaming'
-              ? {
-                  ...msg,
-                  content: msg.content || 'Completed',
-                  status: 'complete' as const,
-                }
-              : msg
-          ),
-          isLoading: false,
-        }));
-      });
+      setState((prev) => ({
+        ...prev,
+        messages: prev.messages.map((msg) =>
+          msg.id === assistantMessageId && msg.status === 'streaming'
+            ? {
+                ...msg,
+                content: msg.content || 'Completed',
+                status: 'complete' as const,
+              }
+            : msg
+        ),
+        isLoading: false,
+      }));
     } catch (error) {
       console.error('Stream processing failed:', error);
-      flushSync(() => {
-        setState((prev) => ({
-          ...prev,
-          messages: prev.messages.map((msg) =>
-            msg.id === assistantMessageId
-              ? {
-                  ...msg,
-                  content: 'Failed to get response. Please try again.',
-                  status: 'error' as const,
-                }
-              : msg
-          ),
-          isLoading: false,
-        }));
-      });
+      setState((prev) => ({
+        ...prev,
+        messages: prev.messages.map((msg) =>
+          msg.id === assistantMessageId
+            ? {
+                ...msg,
+                content: 'Failed to get response. Please try again.',
+                status: 'error' as const,
+              }
+            : msg
+        ),
+        isLoading: false,
+      }));
     }
   }, []);
 
   // Load project data
   const loadProject = useCallback(async (id: string) => {
     console.log(`[useWorkspace] loadProject called for id: ${id}`);
-    setState((prev) => ({ ...prev, isLoading: true }));
+
+    // Check if we have a pending prompt from sessionStorage
+    const hasPendingPrompt = pendingPromptRef.current !== null;
+    const pendingPrompt = pendingPromptRef.current;
+
+    console.log(`[useWorkspace] Has pending prompt: ${hasPendingPrompt}`);
+
+    // If no pending prompt, set loading state
+    if (!hasPendingPrompt) {
+      setState((prev) => ({ ...prev, isLoading: true }));
+    }
 
     try {
       console.log(`[useWorkspace] Fetching project and files...`);
@@ -267,7 +378,7 @@ export function useWorkspace(projectId?: string) {
         const files = buildFileTree(filesRes.data || []);
         console.log(`[useWorkspace] Built file tree with ${files.length} root nodes`);
 
-        // Check if there's an initial prompt in the project context that needs processing
+        // Check project context for initial prompt info
         const context = projectData.context as Record<string, unknown> | undefined;
         const initialPrompt = context?.initialPrompt as string | undefined;
         const hasReceivedMessage = context?.hasReceivedMessage as boolean | undefined;
@@ -275,13 +386,30 @@ export function useWorkspace(projectId?: string) {
         console.log(`[useWorkspace] Context:`, {
           hasInitialPrompt: !!initialPrompt,
           hasReceivedMessage,
-          initialPromptProcessed: initialPromptProcessed.current
+          hasPendingPrompt,
         });
 
-        // If there's an initial prompt and it hasn't been processed yet
-        if (initialPrompt && !hasReceivedMessage && !initialPromptProcessed.current) {
-          console.log(`[useWorkspace] Processing initial prompt...`);
-          initialPromptProcessed.current = true;
+        // Case 1: We have a pending prompt from sessionStorage (immediate display)
+        if (hasPendingPrompt && pendingPrompt) {
+          console.log(`[useWorkspace] Processing pending prompt from sessionStorage`);
+
+          // Clear the ref
+          pendingPromptRef.current = null;
+
+          // Update state with project/files, keep existing messages
+          setState((prev) => ({
+            ...prev,
+            project,
+            files,
+            previewUrl: project.previewUrl || null,
+          }));
+
+          // Start streaming with the pending assistant message ID
+          processStream(id, pendingPrompt, 'msg-pending-2');
+        }
+        // Case 2: Initial prompt exists but hasn't been processed (fallback for direct URL access)
+        else if (initialPrompt && !hasReceivedMessage) {
+          console.log(`[useWorkspace] Processing initial prompt from API (fallback)`);
 
           const userMessageId = `msg-${++messageIdCounter.current}`;
           const assistantMessageId = `msg-${++messageIdCounter.current}`;
@@ -310,27 +438,20 @@ export function useWorkspace(projectId?: string) {
             },
           ];
 
-          // Use flushSync to ensure the messages are rendered before starting the stream
-          flushSync(() => {
-            setState((prev) => {
-              console.log(`[useWorkspace] Setting state with files:`, files.length, 'nodes');
-              console.log(`[useWorkspace] Setting state with messages:`, initialMessages.length, 'messages');
-              return {
-                ...prev,
-                project,
-                files,
-                messages: initialMessages,
-                previewUrl: project.previewUrl || null,
-                isLoading: true,
-              };
-            });
-          });
-          console.log(`[useWorkspace] State updated with initial prompt, starting stream...`);
+          setState((prev) => ({
+            ...prev,
+            project,
+            files,
+            messages: initialMessages,
+            previewUrl: project.previewUrl || null,
+            isLoading: true,
+          }));
 
           // Start streaming the initial prompt
           processStream(id, initialPrompt, assistantMessageId);
-        } else if (initialPrompt && hasReceivedMessage) {
-          // Already processed - just show the user message
+        }
+        // Case 3: Already processed - just show the user message
+        else if (initialPrompt && hasReceivedMessage) {
           console.log(`[useWorkspace] Initial prompt already processed, showing user message only`);
           const initialMessages: ChatMessage[] = [
             {
@@ -350,8 +471,9 @@ export function useWorkspace(projectId?: string) {
             previewUrl: project.previewUrl || null,
             isLoading: false,
           }));
-        } else {
-          // No initial prompt
+        }
+        // Case 4: No initial prompt
+        else {
           console.log(`[useWorkspace] No initial prompt, setting project state`);
           setState((prev) => ({
             ...prev,
@@ -364,6 +486,7 @@ export function useWorkspace(projectId?: string) {
         console.log(`[useWorkspace] loadProject complete`);
       } else {
         console.error(`[useWorkspace] Project response not successful:`, projectRes.error);
+        setState((prev) => ({ ...prev, isLoading: false }));
       }
     } catch (error) {
       console.error('[useWorkspace] Failed to load project:', error);
@@ -420,7 +543,7 @@ export function useWorkspace(projectId?: string) {
         status: 'complete',
       };
 
-      // Add pending assistant message with empty reasoning
+      // Add pending assistant message with analyzing reasoning
       const assistantMessage: ChatMessage = {
         id: assistantMessageId,
         role: 'assistant',
@@ -480,16 +603,11 @@ export function useWorkspace(projectId?: string) {
     setState((prev) => ({ ...prev, activeTab: tab }));
   }, []);
 
-  // Load project on mount - using a ref to prevent cascading renders
-  const initialLoadRef = useRef(false);
+  // Load project on mount
   useEffect(() => {
-    if (projectId && !initialLoadRef.current) {
-      initialLoadRef.current = true;
-      // Use setTimeout to defer the state update
-      const timeoutId = setTimeout(() => {
-        loadProject(projectId);
-      }, 0);
-      return () => clearTimeout(timeoutId);
+    if (projectId && !initialLoadStarted.current) {
+      initialLoadStarted.current = true;
+      loadProject(projectId);
     }
   }, [projectId, loadProject]);
 

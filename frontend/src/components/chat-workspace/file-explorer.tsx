@@ -23,13 +23,13 @@ export function FileExplorer({
     .map((f) => f.id);
 
   return (
-    <div className={cn('h-full', className)}>
-      <div className="flex h-10 items-center border-b px-3">
-        <span className="text-sm font-medium text-muted-foreground">Files</span>
+    <div className={cn('h-full', className)} style={{ backgroundColor: '#272822' }}>
+      <div className="flex h-10 items-center px-3" style={{ borderBottom: '1px solid #3e3d32' }}>
+        <span className="text-sm font-medium" style={{ color: '#f8f8f2' }}>Files</span>
       </div>
       <div className="h-[calc(100%-2.5rem)]">
         {files.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+          <div className="flex h-full items-center justify-center text-sm" style={{ color: '#75715e' }}>
             No files yet
           </div>
         ) : (
