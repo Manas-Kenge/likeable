@@ -31,6 +31,8 @@ import {
   CheckCircle2Icon,
   Loader2Icon,
   FileEditIcon,
+  FileSearchIcon,
+  TerminalIcon,
 } from "lucide-react";
 
 interface ChatPanelProps {
@@ -41,19 +43,21 @@ interface ChatPanelProps {
   projectName?: string;
 }
 
-// Get icon for reasoning step type
-function getStepIcon(type: string) {
+// Get icon for reasoning step — uses full step for per-tool-name icons
+function getStepIcon(step: ReasoningStep | string) {
+  const type = typeof step === 'string' ? step : step.type;
+  const toolName = typeof step === 'string' ? undefined : step.toolName;
+
+  if (type === 'tool_call') {
+    if (toolName === 'read_file' || toolName === 'list_files') return FileSearchIcon;
+    if (toolName === 'run_command') return TerminalIcon;
+    return WrenchIcon;
+  }
   switch (type) {
-    case "thinking":
-      return BrainIcon;
-    case "tool_call":
-      return WrenchIcon;
-    case "file_change":
-      return FileIcon;
-    case "file_working":
-      return FileEditIcon;
-    default:
-      return CheckCircle2Icon;
+    case 'thinking': return BrainIcon;
+    case 'file_change': return FileIcon;
+    case 'file_working': return FileEditIcon;
+    default: return CheckCircle2Icon;
   }
 }
 
@@ -111,7 +115,7 @@ export function ChatPanel({
                             {msg.reasoning.map((step) => (
                               <ChainOfThoughtStep
                                 key={step.id}
-                                icon={getStepIcon(step.type)}
+                                icon={getStepIcon(step)}
                                 label={<StepLabel step={step} />}
                                 description={step.description}
                                 status={step.status}
@@ -140,7 +144,7 @@ export function ChatPanel({
                             {msg.reasoning.map((step) => (
                               <ChainOfThoughtStep
                                 key={step.id}
-                                icon={getStepIcon(step.type)}
+                                icon={getStepIcon(step)}
                                 label={step.label}
                                 description={step.description}
                                 status="complete"

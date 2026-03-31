@@ -74,19 +74,25 @@ export async function* streamChat(
       ],
       tools: createFileTools(sandbox),
       stopWhen: stepCountIs(20),
+      toolChoice: "auto",
     });
 
     for await (const part of result.fullStream) {
       if (part.type === "tool-call") {
         const toolName = part.toolName;
         const input = part.input as Record<string, unknown>;
+        const path = (input.path as string) ?? null;
+
         if (toolName === "write_file") {
-          yield { type: "file_start", data: { path: input.path } };
+          // file_start/file_complete handle write_file — skip generic step to avoid duplication
+          yield { type: "file_start", data: { path } };
+        } else {
+          // Emit structured step for read_file, run_command, list_files
+          yield {
+            type: "step",
+            data: { toolName, path },
+          };
         }
-        yield {
-          type: "step",
-          data: { description: `${toolName}(${JSON.stringify(input).slice(0, 80)})` },
-        };
       } else if (part.type === "tool-result") {
         const toolName = part.toolName;
         const input = part.input as Record<string, unknown>;

@@ -82,6 +82,7 @@ export function useWorkspace(projectId?: string) {
     activeTab: initialData.activeTab,
     isLoading: initialData.isLoading,
     previewUrl: initialData.previewUrl,
+    previewReloadTrigger: 0,
   });
 
   // Store pending prompt for use in loadProject
@@ -96,18 +97,11 @@ export function useWorkspace(projectId?: string) {
     message: string,
     assistantMessageId: string
   ) => {
-    console.log(`[processStream] Starting stream for project ${projectId}`);
-    console.log(`[processStream] Message: ${message.substring(0, 50)}...`);
-    console.log(`[processStream] Assistant message ID: ${assistantMessageId}`);
-
     try {
       const streamGenerator = api.streamMessage(projectId, message);
       const allChanges: { path: string; action: 'create' | 'update' | 'delete' }[] = [];
-      let chunkCount = 0;
 
       for await (const chunk of streamGenerator) {
-        chunkCount++;
-        console.log(`[processStream] Received chunk ${chunkCount}:`, chunk.substring(0, 100));
         try {
           const event: StreamEvent = JSON.parse(chunk);
 
@@ -158,10 +152,23 @@ export function useWorkspace(projectId?: string) {
             }
 
             case 'step': {
-              const stepData = event.data as { num?: number; total?: number; description?: string };
-              const stepNum = stepData?.num || 0;
-              const total = stepData?.total || stepNum;
-              const description = stepData?.description || '';
+              const stepData = event.data as { toolName?: string; path?: string; description?: string };
+              const toolName = stepData?.toolName ?? null;
+              const filePath = stepData?.path ?? null;
+
+              let label: string;
+              if (toolName === 'read_file' && filePath) {
+                label = `Reading ${filePath}`;
+              } else if (toolName === 'run_command') {
+                label = 'Running command';
+              } else if (toolName === 'list_files') {
+                label = 'Listing files';
+              } else if (toolName) {
+                label = filePath ? `${toolName}: ${filePath}` : toolName;
+              } else {
+                label = stepData?.description || 'Working...';
+              }
+
               setState((prev) => ({
                 ...prev,
                 messages: prev.messages.map((msg) =>
@@ -172,7 +179,9 @@ export function useWorkspace(projectId?: string) {
                           id: `reason-${++reasoningIdCounter.current}`,
                           type: 'tool_call',
                           status: 'active',
-                          label: `Step ${stepNum}/${total}: ${description}`,
+                          label,
+                          toolName: toolName ?? undefined,
+                          filePath: filePath ?? undefined,
                           timestamp: new Date(),
                         }),
                       }
@@ -257,10 +266,6 @@ export function useWorkspace(projectId?: string) {
                     : msg
                 ),
                 isLoading: false,
-                // Force preview refresh with cache-busting timestamp
-                previewUrl: prev.project?.previewUrl
-                  ? `${prev.project.previewUrl.split('?')[0]}?t=${Date.now()}`
-                  : prev.previewUrl,
               }));
 
               // Refresh file tree after changes
@@ -273,6 +278,17 @@ export function useWorkspace(projectId?: string) {
                   }));
                 }
               }
+
+              // Preview reload is now handled by the 'preview_ready' event from backend
+              // which waits for the dev server to actually be ready
+              break;
+            }
+
+            case 'preview_ready': {
+              setState((prev) => ({
+                ...prev,
+                previewReloadTrigger: (prev.previewReloadTrigger || 0) + 1,
+              }));
               break;
             }
 
@@ -333,13 +349,9 @@ export function useWorkspace(projectId?: string) {
 
   // Load project data
   const loadProject = useCallback(async (id: string) => {
-    console.log(`[useWorkspace] loadProject called for id: ${id}`);
-
     // Check if we have a pending prompt from sessionStorage
     const hasPendingPrompt = pendingPromptRef.current !== null;
     const pendingPrompt = pendingPromptRef.current;
-
-    console.log(`[useWorkspace] Has pending prompt: ${hasPendingPrompt}`);
 
     // If no pending prompt, set loading state
     if (!hasPendingPrompt) {
@@ -347,23 +359,10 @@ export function useWorkspace(projectId?: string) {
     }
 
     try {
-      console.log(`[useWorkspace] Fetching project and files...`);
       const [projectRes, filesRes] = await Promise.all([
         api.getProject(id),
         api.getProjectFiles(id),
       ]);
-
-      console.log(`[useWorkspace] Project response:`, {
-        success: projectRes.success,
-        hasData: !!projectRes.data,
-        status: projectRes.data?.status,
-        filesCount: projectRes.data?.files?.length,
-      });
-      console.log(`[useWorkspace] Files response:`, {
-        success: filesRes.success,
-        filesCount: filesRes.data?.length,
-        files: filesRes.data?.slice(0, 5),
-      });
 
       if (projectRes.success && projectRes.data) {
         const projectData = projectRes.data;
@@ -376,22 +375,14 @@ export function useWorkspace(projectId?: string) {
 
         // Convert file paths to FileNode tree
         const files = buildFileTree(filesRes.data || []);
-        console.log(`[useWorkspace] Built file tree with ${files.length} root nodes`);
 
         // Check project context for initial prompt info
         const context = projectData.context as Record<string, unknown> | undefined;
         const initialPrompt = context?.initialPrompt as string | undefined;
         const hasReceivedMessage = context?.hasReceivedMessage as boolean | undefined;
 
-        console.log(`[useWorkspace] Context:`, {
-          hasInitialPrompt: !!initialPrompt,
-          hasReceivedMessage,
-          hasPendingPrompt,
-        });
-
         // Case 1: We have a pending prompt from sessionStorage (immediate display)
         if (hasPendingPrompt && pendingPrompt) {
-          console.log(`[useWorkspace] Processing pending prompt from sessionStorage`);
 
           // Clear the ref
           pendingPromptRef.current = null;
@@ -409,7 +400,6 @@ export function useWorkspace(projectId?: string) {
         }
         // Case 2: Initial prompt exists but hasn't been processed (fallback for direct URL access)
         else if (initialPrompt && !hasReceivedMessage) {
-          console.log(`[useWorkspace] Processing initial prompt from API (fallback)`);
 
           const userMessageId = `msg-${++messageIdCounter.current}`;
           const assistantMessageId = `msg-${++messageIdCounter.current}`;
@@ -452,7 +442,6 @@ export function useWorkspace(projectId?: string) {
         }
         // Case 3: Already processed - just show the user message
         else if (initialPrompt && hasReceivedMessage) {
-          console.log(`[useWorkspace] Initial prompt already processed, showing user message only`);
           const initialMessages: ChatMessage[] = [
             {
               id: `msg-${++messageIdCounter.current}`,
@@ -474,7 +463,6 @@ export function useWorkspace(projectId?: string) {
         }
         // Case 4: No initial prompt
         else {
-          console.log(`[useWorkspace] No initial prompt, setting project state`);
           setState((prev) => ({
             ...prev,
             project,
@@ -483,7 +471,6 @@ export function useWorkspace(projectId?: string) {
             isLoading: false,
           }));
         }
-        console.log(`[useWorkspace] loadProject complete`);
       } else {
         console.error(`[useWorkspace] Project response not successful:`, projectRes.error);
         setState((prev) => ({ ...prev, isLoading: false }));

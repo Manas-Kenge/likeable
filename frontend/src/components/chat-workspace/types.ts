@@ -17,6 +17,7 @@ export interface ReasoningStep {
   label: string;
   description?: string;
   filePath?: string;
+  toolName?: string;
   timestamp: Date;
 }
 
@@ -27,7 +28,7 @@ export interface FileChange {
 }
 
 export interface StreamEvent {
-  type: 'plan' | 'step' | 'files' | 'thinking' | 'tool_call' | 'tool_result' | 'message' | 'file_change' | 'file_start' | 'file_complete' | 'done' | 'error';
+  type: 'plan' | 'step' | 'files' | 'thinking' | 'tool_call' | 'tool_result' | 'message' | 'file_change' | 'file_start' | 'file_complete' | 'done' | 'preview_ready' | 'error';
   data: unknown;
   timestamp?: string;
 }
@@ -58,4 +59,5 @@ export interface WorkspaceState {
   activeTab: PreviewTab;
   isLoading: boolean;
   previewUrl: string | null;
+  previewReloadTrigger?: number;
 }
