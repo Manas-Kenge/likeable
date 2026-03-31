@@ -11,7 +11,6 @@
 # const sandbox = await Sandbox.create('lovable-clone-dev')
 
 team_id = "1d3d99a0-5d72-40fe-98fa-af41eefacf6f"
-start_cmd = "cd /home/user/app && npm run dev"
 dockerfile = "e2b.Dockerfile"
 template_name = "lovable-clone-dev"
 template_id = "oemwi4t3adjnitsyzbg3"
