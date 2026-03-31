@@ -1,64 +1,65 @@
 import { z } from "zod";
-import { tool } from "@langchain/core/tools";
+import { tool } from "ai";
 import type { Sandbox } from "e2b";
 
 const BASE_PATH = "/home/user/app";
 
-/**
- * Core file operation - handles both create and update
- */
 export function createFileTools(sandbox: Sandbox) {
-  const writeFile = tool(
-    async ({ path, content }) => {
+  const write_file = tool({
+    description: "Create or update a file with complete content. Always write the full file, never partial. Use relative paths like 'src/App.tsx'.",
+    inputSchema: z.object({
+      path: z.string().describe("Relative file path from project root, e.g. 'src/components/Hero.tsx'"),
+      content: z.string().describe("Complete file content to write"),
+    }),
+    execute: async ({ path, content }) => {
       try {
         const fullPath = `${BASE_PATH}/${path.replace(/^\.?\//, "")}`;
-
-        // Ensure directory exists
         const dir = fullPath.substring(0, fullPath.lastIndexOf("/"));
-        await sandbox.commands.run(`mkdir -p "${dir}"`);
 
+        await sandbox.commands.run(`mkdir -p "${dir}"`);
         await sandbox.files.write(fullPath, content);
+
+        // Touch to trigger Vite HMR file watcher
+        await sandbox.commands.run(`touch "${fullPath}"`);
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        // Guard: warn if LLM wrote index.css without the required @theme inline block
+        if (path.includes("index.css") && !content.includes("@theme inline")) {
+          return `⚠ Written: ${path} — WARNING: index.css is missing the @theme inline block. This will break all Tailwind color utilities (bg-background, border-border, etc.). You must include the @theme inline block. Call read_file on the original index.css and restore it.`;
+        }
+
         return `✓ Written: ${path}`;
       } catch (error) {
         return `✗ Error writing ${path}: ${error}`;
       }
     },
-    {
-      name: "write_file",
-      description: "Create or update a file with content. Use relative paths like 'src/App.tsx'",
-      schema: z.object({
-        path: z.string().describe("Relative file path"),
-        content: z.string().describe("Complete file content"),
-      }),
-    }
-  );
+  });
 
-  const readFile = tool(
-    async ({ path }) => {
+  const read_file = tool({
+    description: "Read a file's current contents. Always read a file before modifying it.",
+    inputSchema: z.object({
+      path: z.string().describe("Relative file path, e.g. 'src/App.tsx'"),
+    }),
+    execute: async ({ path }) => {
       try {
         const fullPath = `${BASE_PATH}/${path.replace(/^\.?\//, "")}`;
-        const content = await sandbox.files.read(fullPath);
-        return content;
+        return await sandbox.files.read(fullPath);
       } catch (error) {
         return `✗ Error reading ${path}: ${error}`;
       }
     },
-    {
-      name: "read_file",
-      description: "Read a file's contents",
-      schema: z.object({
-        path: z.string().describe("Relative file path"),
-      }),
-    }
-  );
+  });
 
-  const runCommand = tool(
-    async ({ command }) => {
+  const run_command = tool({
+    description: "Execute a shell command in the project directory (/home/user/app). Use for installing packages or other necessary operations.",
+    inputSchema: z.object({
+      command: z.string().describe("Shell command to run, e.g. 'npm install framer-motion'"),
+    }),
+    execute: async ({ command }) => {
       try {
         const result = await sandbox.commands.run(`cd ${BASE_PATH} && ${command}`, {
           timeoutMs: 60000,
         });
-
         if (result.exitCode === 0) {
           return `✓ ${command}\n${result.stdout}`;
         } else {
@@ -68,50 +69,29 @@ export function createFileTools(sandbox: Sandbox) {
         return `✗ Command failed: ${error}`;
       }
     },
-    {
-      name: "run_command",
-      description: "Execute a shell command in the project directory",
-      schema: z.object({
-        command: z.string().describe("Shell command to run"),
-      }),
-    }
-  );
+  });
 
-  const listFiles = tool(
-    async ({ directory = "." }) => {
+  const list_files = tool({
+    description: "List source files in the project. Call this first to understand the project structure.",
+    inputSchema: z.object({
+      directory: z.string().optional().default(".").describe("Directory to list, relative to project root"),
+    }),
+    execute: async ({ directory = "." }) => {
       try {
         const fullPath = `${BASE_PATH}/${directory.replace(/^\.?\//, "")}`;
         const result = await sandbox.commands.run(
-          `find ${fullPath} -maxdepth 3 -type f -name "*.tsx" -o -name "*.ts" -o -name "*.jsx" -o -name "*.js" -o -name "*.css" | head -50`
+          `find ${fullPath} -maxdepth 3 -type f \\( -name "*.tsx" -o -name "*.ts" -o -name "*.jsx" -o -name "*.js" -o -name "*.css" -o -name "*.json" \\) | grep -v node_modules | grep -v dist | head -60`
         );
-
         const files = result.stdout
           .split("\n")
           .filter(Boolean)
           .map(f => f.replace(`${BASE_PATH}/`, ""));
-
-        return `Files found:\n${files.join("\n")}`;
+        return `Files:\n${files.join("\n")}`;
       } catch (error) {
         return `✗ Error listing files: ${error}`;
       }
     },
-    {
-      name: "list_files",
-      description: "List project files (useful for initial exploration)",
-      schema: z.object({
-        directory: z.string().optional().default(".").describe("Directory to list"),
-      }),
-    }
-  );
+  });
 
-  return [writeFile, readFile, runCommand, listFiles];
+  return { write_file, read_file, run_command, list_files };
 }
-
-// Remove these - you don't need them:
-// ❌ createFile (use write_file)
-// ❌ updateFile (use write_file)
-// ❌ deleteFile (rarely needed, can use run_command)
-// ❌ searchFiles (use list_files or run_command with grep)
-// ❌ writeMultipleFiles (just call write_file multiple times)
-// ❌ getContext/saveContext (use state instead)
-// ❌ listDirectory (use list_files)

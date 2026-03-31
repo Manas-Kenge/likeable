@@ -8,29 +8,27 @@ import {
   getProject,
   getAllProjects,
   getSandbox,
-  updateProjectContext,
-  updateProjectFiles,
   addMessage,
+  getHistory,
 } from "./src/project-service";
-import { chat, streamChat } from "./src/graph";
+import { streamChat } from "./src/graph";
 import type {
   CreateProjectRequest,
   ChatRequest,
   ApiResponse,
   Project,
-  ChatResponse,
 } from "./src/types";
 
 // Load environment variables
 config();
 
 // Validate required environment variables
-const requiredEnvVars = ["ANTHROPIC_API_KEY", "E2B_API_KEY"];
+const requiredEnvVars = ["ZAI_API_KEY", "E2B_API_KEY"] as const;
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
     console.error(`❌ Missing required environment variable: ${envVar}`);
     console.error(`Please create a .env file with the following variables:`);
-    console.error(`  ANTHROPIC_API_KEY=your_anthropic_api_key`);
+    console.error(`  ZAI_API_KEY=your_zai_api_key`);
     console.error(`  E2B_API_KEY=your_e2b_api_key`);
     process.exit(1);
   }
@@ -42,12 +40,6 @@ const PORT = process.env.PORT || 3001;
 // Middleware
 app.use(cors());
 app.use(express.json());
-
-// Request logging
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
-  next();
-});
 
 // ============================================================================
 // ROUTES
@@ -76,33 +68,7 @@ app.post("/project", async (req: Request, res: Response) => {
       return;
     }
 
-    console.log(`\n[API] POST /project - Creating project: ${body.name}`);
-    console.log(`[API] Has initial prompt: ${!!body.initialPrompt}`);
-
-    const startTime = Date.now();
     const project = await createProject(body);
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-
-    console.log(`[API] Project created in ${elapsed}s`);
-    console.log(`[API] Returning project:`, {
-      id: project.id,
-      status: project.status,
-      filesCount: project.files.length,
-      previewUrl: project.previewUrl,
-    });
-
-    // Note: The frontend will call the streaming endpoint to process the initial prompt
-    // This ensures proper SSE streaming to the client
-
-    if (body.initialPrompt) {
-      addMessage(project.id, {
-        id: `msg-${Date.now()}`,
-        role: "user",
-        content: body.initialPrompt,
-        timestamp: new Date().toISOString(),
-        status: "complete",
-      });
-    }
 
     res.status(201).json({
       success: true,
@@ -127,24 +93,15 @@ app.get(
   async (req: Request<{ projectId: string }>, res: Response) => {
     try {
       const { projectId } = req.params;
-      console.log(`[API] GET /project/${projectId}`);
-
       const project = await getProject(projectId);
 
       if (!project) {
-        console.log(`[API] Project ${projectId} not found`);
         res.status(404).json({
           success: false,
           error: "Project not found",
         } as ApiResponse<null>);
         return;
       }
-
-      console.log(`[API] Returning project:`, {
-        id: project.id,
-        status: project.status,
-        filesCount: project.files.length,
-      });
 
       res.json({
         success: true,
@@ -227,80 +184,28 @@ app.post(
         return;
       }
 
-      // Determine if this is the first message
-      const isFirstMessage = !project.context.hasReceivedMessage;
+      const history = getHistory(projectId);
 
-      // Handle streaming if requested
-      if (body.stream) {
-        res.setHeader("Content-Type", "text/event-stream");
-        res.setHeader("Cache-Control", "no-cache");
-        res.setHeader("Connection", "keep-alive");
+      res.setHeader("Content-Type", "text/event-stream");
+      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Connection", "keep-alive");
 
-        try {
-          for await (const event of streamChat(
-            body.message,
-            projectId,
-            isFirstMessage,
-            sandbox
-          )) {
-            res.write(`data: ${JSON.stringify(event)}\n\n`);
+      let finalText = "";
+      try {
+        for await (const event of streamChat(body.message, projectId, sandbox, history)) {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+          if (event.type === "done") {
+            finalText = (event.data as { text?: string })?.text ?? "";
           }
-          res.write(`data: [DONE]\n\n`);
-
-          // Update project context after streaming completes
-          updateProjectContext(projectId, {
-            hasReceivedMessage: true,
-            lastMessageAt: new Date().toISOString(),
-          });
-
-          res.end();
-        } catch (streamError) {
-          res.write(
-            `data: ${JSON.stringify({ error: String(streamError) })}\n\n`
-          );
-          res.end();
         }
-        return;
+        addMessage(projectId, body.message, finalText);
+        res.write(`data: [DONE]\n\n`);
+        res.end();
+      } catch (streamError) {
+        res.write(`data: ${JSON.stringify({ error: String(streamError) })}\n\n`);
+        res.end();
       }
-
-      // Non-streaming response
-      console.log(
-        `Chat message for project ${projectId}: ${body.message.slice(0, 50)}...`
-      );
-      const result = await chat(body.message, projectId, isFirstMessage, sandbox);
-
-      // Update project context
-      updateProjectContext(projectId, {
-        hasReceivedMessage: true,
-        lastMessageAt: new Date().toISOString(),
-      });
-
-      // Update project files from changed files
-      if (result.changedFiles && result.changedFiles.length > 0) {
-        const filePaths = result.changedFiles.map(
-          (f: { path: string }) => f.path
-        );
-        updateProjectFiles(projectId, filePaths);
-      }
-
-      // Get the final message from the last AI message
-      const lastMessage = result.messages[result.messages.length - 1];
-      const finalMessage =
-        lastMessage && typeof lastMessage.content === "string"
-          ? lastMessage.content
-          : "Implementation complete!";
-
-      const response: ChatResponse = {
-        message: finalMessage,
-        changes: result.changedFiles || [],
-        previewUrl: project.previewUrl,
-        status: "success",
-      };
-
-      res.json({
-        success: true,
-        data: response,
-      } as ApiResponse<ChatResponse>);
+      return;
     } catch (error) {
       console.error("Chat failed:", error);
       res.status(500).json({
@@ -320,22 +225,15 @@ app.get(
   async (req: Request<{ projectId: string }>, res: Response) => {
     try {
       const { projectId } = req.params;
-      console.log(`[API] GET /project/${projectId}/files`);
-
       const project = await getProject(projectId);
 
       if (!project) {
-        console.log(`[API] Project ${projectId} not found for files request`);
         res.status(404).json({
           success: false,
           error: "Project not found",
         } as ApiResponse<null>);
         return;
       }
-
-      console.log(
-        `[API] Returning ${project.files.length} files for project ${projectId}`
-      );
 
       res.json({
         success: true,
@@ -382,7 +280,6 @@ app.get(
       // Use sandbox.files.read() for proper file reading
       // Convert relative path to absolute path in sandbox
       const fullPath = path.startsWith("/") ? path : `/home/user/app/${path}`;
-      console.log(`[API] Reading file: ${fullPath}`);
       try {
         const content = await sandbox.files.read(fullPath);
         res.json({
@@ -440,8 +337,7 @@ Available endpoints:
   POST   /project              - Create new project
   GET    /project/:id          - Get project details
   GET    /projects             - List all projects
-  POST   /project/chat/:id     - Send message to AI
-  POST   /project/chat/:id/resume - Resume after interrupt
+  POST   /project/chat/:id     - Send message to AI (streaming)
   GET    /project/:id/files    - List project files
   GET    /project/:id/file     - Read file content
   `);

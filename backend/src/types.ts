@@ -1,3 +1,5 @@
+import type { ModelMessage } from "ai";
+
 /**
  * Project Types
  */
@@ -12,27 +14,7 @@ export interface Project {
   previewUrl?: string;
   status: "creating" | "running" | "stopped" | "error";
   files: string[];
-  context: Record<string, unknown>;
-  messages: ChatMessage[];
-}
-
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: string;
-  status?: "pending" | "streaming" | "complete" | "error";
-  changes?: FileChange[];
-  reasoning?: ReasoningStep[];
-}
-
-export interface ReasoningStep {
-  id: string;
-  type: "thinking" | "tool_call" | "tool_result" | "file_change";
-  status: "active" | "complete" | "pending";
-  label: string;
-  description?: string;
-  timestamp: string;
+  messages: ModelMessage[];
 }
 
 export interface CreateProjectRequest {
@@ -44,24 +26,6 @@ export interface CreateProjectRequest {
 export interface ChatRequest {
   message: string;
   stream?: boolean;
-}
-
-export interface ChatResponse {
-  message: string;
-  changes: FileChange[];
-  previewUrl?: string;
-  status: "success" | "pending_approval" | "error";
-  interrupt?: {
-    type: string;
-    message: string;
-    options: string[];
-  };
-}
-
-export interface FileChange {
-  path: string;
-  action: "create" | "update" | "delete";
-  content?: string;
 }
 
 export interface ApiResponse<T> {

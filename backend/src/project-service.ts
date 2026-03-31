@@ -1,5 +1,6 @@
 import { Sandbox } from "e2b";
 import { v4 as uuidv4 } from "uuid";
+import type { ModelMessage } from "ai";
 import type { Project, CreateProjectRequest } from "./types";
 
 // In-memory storage (replace with database in production)
@@ -118,9 +119,6 @@ export async function createProject(
     status: "creating",
     files: [],
     messages: [],
-    context: request.initialPrompt
-      ? { initialPrompt: request.initialPrompt, hasReceivedMessage: false }
-      : {},
   };
 
   projects.set(projectId, project);
@@ -152,6 +150,15 @@ export async function createProject(
     // Get the preview URL - E2B SDK handles this automatically
     const previewUrl = sandbox.getHost(5173);
     console.log(`[${projectId}] Preview URL: https://${previewUrl}`);
+
+    // Start dev server with HMR host configured for E2B proxy
+    console.log(`[${projectId}] Starting dev server with HMR host: ${previewUrl}`);
+    await sandbox.commands.run(
+      `cd /home/user/app && VITE_DEV_SERVER_HMR_HOST=${previewUrl} npm run dev > /tmp/vite.log 2>&1 &`,
+      { background: true }
+    );
+    // Give the dev server a moment to start
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
     // Update project with sandbox info
     project.sandboxId = sandbox.sandboxId;
@@ -241,54 +248,35 @@ export function getSandbox(projectId: string): Sandbox | undefined {
 }
 
 /**
- * Update project context
- */
-export function updateProjectContext(
-  projectId: string,
-  context: Record<string, unknown>
-): Project | null {
-  const project = projects.get(projectId);
-  if (!project) return null;
-
-  project.context = { ...project.context, ...context };
-  project.updatedAt = new Date().toISOString();
-  projects.set(projectId, project);
-
-  return project;
-}
-
-/**
- * Update project files list
- */
-export function updateProjectFiles(
-  projectId: string,
-  files: string[]
-): Project | null {
-  const project = projects.get(projectId);
-  if (!project) return null;
-
-  project.files = [...new Set([...project.files, ...files])];
-  project.updatedAt = new Date().toISOString();
-  projects.set(projectId, project);
-
-  return project;
-}
-
-/**
- * Add a message to project history
+ * Add a user+assistant turn to project history.
+ * Enforces rolling 10-turn (20-entry) window.
  */
 export function addMessage(
   projectId: string,
-  message: import("./types").ChatMessage
-): Project | null {
+  userContent: string,
+  assistantContent: string
+): void {
   const project = projects.get(projectId);
-  if (!project) return null;
+  if (!project) return;
 
-  project.messages.push(message);
+  project.messages.push({ role: "user", content: userContent });
+  project.messages.push({ role: "assistant", content: assistantContent });
+
+  if (project.messages.length > 20) {
+    project.messages = project.messages.slice(-20);
+  }
+
   project.updatedAt = new Date().toISOString();
   projects.set(projectId, project);
+}
 
-  return project;
+/**
+ * Get conversation history for a project (for passing to the LLM).
+ */
+export function getHistory(projectId: string): ModelMessage[] {
+  const project = projects.get(projectId);
+  if (!project) return [];
+  return project.messages;
 }
 
 /**
@@ -431,6 +419,16 @@ export async function restartProject(
 
     // E2B SDK handles host URL automatically
     const previewUrl = sandbox.getHost(5173);
+    
+    // Start dev server with HMR host configured for E2B proxy
+    console.log(`[${projectId}] Starting dev server with HMR host: ${previewUrl}`);
+    await sandbox.commands.run(
+      `cd /home/user/app && VITE_DEV_SERVER_HMR_HOST=${previewUrl} npm run dev > /tmp/vite.log 2>&1 &`,
+      { background: true }
+    );
+    // Give the dev server a moment to start
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    
     project.sandboxId = sandbox.sandboxId;
     project.previewUrl = `https://${previewUrl}`;
     project.status = "running";
