@@ -1,6 +1,5 @@
 'use client';
 
-import { useEffect } from 'react';
 import { cn } from '@/lib/utils';
 import { ChatPanel } from './chat-panel';
 import { PreviewPanel } from './preview-panel';
@@ -20,21 +19,11 @@ export function ChatWorkspace({ projectId, className }: ChatWorkspaceProps) {
     activeTab,
     isLoading,
     previewUrl,
+    previewReloadTrigger,
     sendMessage,
     selectFile,
     setActiveTab,
   } = useWorkspace(projectId);
-
-  useEffect(() => {
-    console.log('[ChatWorkspace] State changed:', {
-      projectId,
-      project: project?.id,
-      messagesCount: messages.length,
-      filesCount: files.length,
-      isLoading,
-      previewUrl,
-    });
-  }, [projectId, project, messages, files, isLoading, previewUrl]);
 
   return (
     <div className={cn('flex h-screen', className)}>
@@ -56,6 +45,7 @@ export function ChatWorkspace({ projectId, className }: ChatWorkspaceProps) {
           previewUrl={previewUrl}
           activeTab={activeTab}
           isLoading={isLoading}
+          previewReloadTrigger={previewReloadTrigger}
           onTabChange={setActiveTab}
           onSelectFile={selectFile}
         />

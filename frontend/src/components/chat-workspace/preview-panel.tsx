@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import {
   CodeIcon,
   GlobeIcon,
@@ -32,6 +32,7 @@ interface PreviewPanelProps {
   previewUrl: string | null;
   activeTab: PreviewTab;
   isLoading?: boolean;
+  previewReloadTrigger?: number;
   onTabChange: (tab: PreviewTab) => void;
   onSelectFile: (file: FileNode) => void;
   className?: string;
@@ -44,37 +45,41 @@ const loadingTexts = [
   "Almost there...",
 ];
 
-type ConsoleLog = {
-  level: "log" | "warn" | "error";
-  message: string;
-  timestamp: Date;
-};
-
 export function PreviewPanel({
   files,
   selectedFile,
   previewUrl,
   activeTab,
   isLoading = false,
+  previewReloadTrigger = 0,
   onTabChange,
   onSelectFile,
   className,
 }: PreviewPanelProps) {
   const [fullscreen, setFullscreen] = useState(false);
-  const [consoleLogs, setConsoleLogs] = useState<ConsoleLog[]>([]);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const handleReload = useCallback(() => {
-    if (iframeRef.current) {
-      const src = iframeRef.current.src;
-      iframeRef.current.src = "";
-      setTimeout(() => {
-        if (iframeRef.current) {
-          iframeRef.current.src = src;
-        }
-      }, 50);
+    if (iframeRef.current && iframeRef.current.src) {
+      try {
+        const src = iframeRef.current.src;
+        const url = new URL(src);
+        url.searchParams.set('_t', Date.now().toString());
+        url.searchParams.set('_cache', Math.random().toString());
+        url.searchParams.set('_reload', 'true');
+        iframeRef.current.src = url.toString();
+      } catch (error) {
+        console.error("[PreviewPanel] Failed to reload iframe:", error);
+      }
     }
   }, []);
+
+  // Watch for reload trigger from parent
+  useEffect(() => {
+    if (previewReloadTrigger > 0) {
+      handleReload();
+    }
+  }, [previewReloadTrigger, handleReload]);
 
   const handleOpenExternal = useCallback(() => {
     if (previewUrl) {
@@ -139,14 +144,12 @@ export function PreviewPanel({
         ) : (
           <WebPreview
             defaultUrl={previewUrl || ""}
-            onUrlChange={(url) => console.log("URL changed to:", url)}
             className="h-full"
           >
             <WebPreviewNavigation>
               <WebPreviewNavigationButton
                 onClick={() => {
                   // Browser history navigation not available in sandboxed iframe
-                  console.log("Go back");
                 }}
                 tooltip="Go back"
                 disabled={!previewUrl}
@@ -156,7 +159,6 @@ export function PreviewPanel({
               <WebPreviewNavigationButton
                 onClick={() => {
                   // Browser history navigation not available in sandboxed iframe
-                  console.log("Go forward");
                 }}
                 tooltip="Go forward"
                 disabled={!previewUrl}
@@ -176,7 +178,7 @@ export function PreviewPanel({
                 value={previewUrl || ""}
               />
               <WebPreviewNavigationButton
-                onClick={() => console.log("Select element")}
+                onClick={() => {}}
                 tooltip="Select element"
                 disabled={!previewUrl}
               >
@@ -208,7 +210,7 @@ export function PreviewPanel({
               />
             )}
 
-            <WebPreviewConsole logs={consoleLogs} />
+            <WebPreviewConsole logs={[]} />
           </WebPreview>
         )}
       </div>
