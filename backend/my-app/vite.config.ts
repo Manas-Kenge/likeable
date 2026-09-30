@@ -1,16 +1,16 @@
-import path from "path";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
-export default defineConfig(({ mode }) => {
-  const host = process.env.VITE_DEV_SERVER_HMR_HOST || "localhost";
+export default defineConfig(() => {
+  const host = process.env.VITE_DEV_SERVER_HMR_HOST;
   return {
     plugins: [react(), tailwindcss()],
-    
     resolve: {
       alias: {
-        "@": path.resolve(__dirname, "./src"),
+        "@": path.resolve(path.dirname(fileURLToPath(import.meta.url)), "src"),
       },
     },
     server: {
@@ -18,12 +18,7 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       strictPort: true,
       allowedHosts: [".e2b.app"],
-      cors: true,
-      hmr: {
-        host,
-        protocol: "wss",
-        clientPort: 443,
-      },
+      hmr: host ? { host, protocol: "wss", clientPort: 443 } : undefined,
     },
   };
 });

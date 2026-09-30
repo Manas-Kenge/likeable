@@ -27,3 +27,12 @@ Approved scope: design → frontend → backend. Local single-user React app bui
 - Independent review found four defects, each reproduced before correction: canonical checkpoint paths, truncated/step-limited generation success, stale expired-sandbox status checks, and tab activation during background file refresh. All four fixed; focused re-review passed with no remaining material findings.
 - Final verification: 28 tests/89 assertions passing; backend/frontend TypeScript checks passing; production build passing; lint 0 errors/21 existing warnings; git diff --check passing. Browser checks also cover Preview staying selected after completion and out-of-order file responses.
 - Ruling: preserve feat/likeable-improvements in the current checkout as requested; no merge, push or deployment. Live service verification is the only credential-dependent check outstanding.
+
+## Template follow-up
+- Applied the approved b1VlIttI preset to the generated-app starter as well as the builder; locally bundled Inter, radix-luma, neutral tokens.
+- Node 24 LTS image, npm ci with synchronized lockfiles, build during template publication, runtime user ownership, conditional local/E2B HMR, narrow shadcn helper lint allowances.
+- Added remote SDK build command; historical e2b.toml account IDs are not used. Docker daemon remains inaccessible on this machine.
+- SDK upload bug reproduced: separately generated compressed archives differed by one byte, causing rejected/truncated uploads. Standalone build wrapper buffers actual archive bytes and corrects Content-Length, bounded to 50 MB, with fetch restored afterward. Real HTTP regression failed before the fix and passes afterward.
+- Review also corrected directory exclusion glob semantics and runtime ownership. Explicit subtree patterns prevent local dependencies/build output from entering SDK uploads.
+- Template 5pdqjkf5bs9zu8szolw5 built successfully and configured in ignored backend/.env. Live E2B smoke verified provisioning, ownership, writes/reads, runtime build, preview readiness, snapshots and ZIP export; temporary sandbox shut down afterward. Live AI generation remains unverified.
+- Final follow-up checks: 30 backend tests plus 2 starter HMR tests pass; backend type check, starter lint/build, fresh npm ci/build, and local browser/font rendering pass. Frontend/backend development servers remain running on ports 3000/3001.

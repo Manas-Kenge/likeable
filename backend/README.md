@@ -1,6 +1,6 @@
 # Likeable backend
 
-Run commands from this directory. Requires Bun, a Z.ai API key, and an E2B account with access to a template built from `e2b.Dockerfile` and `my-app/`.
+Run commands from this directory. Requires Bun, Node 24 LTS for template builds, a Z.ai API key, and an E2B account with access to a template built from `e2b.Dockerfile` and `my-app/`.
 
 ```bash
 bun install --frozen-lockfile
@@ -15,7 +15,7 @@ The server listens on `http://127.0.0.1:3001`. Verify it with `curl http://local
 
 ## Sandbox setup
 
-The existing `e2b.toml` contains a previous account's team/template identifiers. Use a template accessible to your account, or configure your own identifiers and build with `bunx e2b template build`. The template must contain the supplied starter at `/home/user/app`, with its dependencies installed. Do not commit your API keys.
+Build the starter remotely with `bun run template:build`, then copy the reported template ID into `E2B_TEMPLATE_ID` in `.env`. This uses your E2B API key and the alias `likeable-react-dev` (`E2B_TEMPLATE_NAME` can override it), and requires no local Docker daemon. The old `e2b.toml` contains historical account identifiers and is not used by this script. The standalone build command buffers source uploads to correct the installed SDK’s compressed-archive length mismatch; it limits each archive to 50 MB and excludes dependency/build directories. The template must contain the supplied starter at `/home/user/app`, with its dependencies installed. Do not commit your API keys.
 
 Generated apps run remotely on E2B. The builder frontend/backend run locally. Sandboxes have a 15-minute lifetime; reopening restores saved files into a new sandbox when the old one is unavailable. Binary assets are included. Dependency folders, build output, caches, environment files and private-key files are excluded. Source snapshots have a 50 MB total limit.
 

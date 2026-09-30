@@ -75,7 +75,7 @@ https://github.com/user-attachments/assets/f7f36797-dd1d-4649-a69b-d97263d7a25a
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 20.9+
+- [Node.js](https://nodejs.org/) 24 LTS
 - [Bun](https://bun.sh/) runtime
 - [E2B](https://e2b.dev/) account and API key
 - [Z.ai](https://z.ai/) API key (ZhipuAI GLM-4.7)
@@ -121,11 +121,11 @@ Frontend runs on `http://localhost:3000`
 
 ### 4. E2B Template Access
 
-Your account must have access to the template set in `E2B_TEMPLATE_ID`. The checked-in `backend/e2b.toml` contains existing account identifiers; configure your own template if it is not accessible. To build the supplied starter:
+Your account must have access to the template set in `E2B_TEMPLATE_ID`. The remote build command uses your E2B key and creates the `likeable-react-dev` template; the historical account identifiers in `backend/e2b.toml` are not used. To build the supplied starter, configure `E2B_API_KEY` first, then run:
 
 ```bash
 cd backend
-bunx e2b template build
+bun run template:build
 ```
 
 ## API Reference
@@ -141,6 +141,8 @@ bunx e2b template build
 | `GET` | `/project/:id/file?path=` | Read file content |
 | `POST` | `/project/:id/resume` | Restore/reopen a sandbox |
 | `GET` | `/project/:id/export` | Download current source ZIP |
+
+Set `E2B_TEMPLATE_ID` to the ID printed by the build command before starting the backend.
 
 Projects are saved in `backend/.data/likeable.sqlite`. Run one backend process per database. Sandboxes expire after 15 minutes; reopen a project to restore its saved source. AI and sandbox services still require internet access. See [backend setup and behavior](backend/README.md) for details.
 
