@@ -1,148 +1,87 @@
-'use client';
+"use client";
+import Editor from "@monaco-editor/react";
+import { FileCode2, LoaderCircle } from "lucide-react";
+import type { FileNode } from "./types";
 
-import Editor, { type Monaco } from '@monaco-editor/react';
-import { cn } from '@/lib/utils';
-import type { FileNode } from './types';
-
-interface CodeEditorProps {
+export function CodeEditor({
+  file,
+  loading,
+  error,
+}: {
   file: FileNode | null;
-  className?: string;
-  onContentChange?: (content: string) => void;
-}
-
-// Monokai color palette for consistent styling
-const monokaiColors = {
-  background: '#272822',
-  foreground: '#f8f8f2',
-  comment: '#75715e',
-  border: '#3e3d32',
-};
-
-// Define Monokai theme inline
-const monokaiTheme = {
-  base: 'vs-dark',
-  inherit: true,
-  rules: [
-    { token: 'comment', foreground: '75715e' },
-    { token: 'string', foreground: 'e6db74' },
-    { token: 'number', foreground: 'ae81ff' },
-    { token: 'keyword', foreground: 'f92672' },
-    { token: 'type', foreground: '66d9ef' },
-    { token: 'class', foreground: 'a6e22e' },
-    { token: 'function', foreground: 'a6e22e' },
-    { token: 'variable', foreground: 'f8f8f2' },
-    { token: 'constant', foreground: 'ae81ff' },
-  ],
-  colors: {
-    'editor.background': '#272822',
-    'editor.foreground': '#f8f8f2',
-    'editor.lineHighlightBackground': '#3e3d32',
-    'editorLineNumber.foreground': '#90908a',
-    'editor.selectionBackground': '#49483e',
-    'editor.inactiveSelectionBackground': '#49483e',
-    'editorCursor.foreground': '#f8f8f0',
-  },
-};
-
-// Map file extensions to Monaco languages
-function getLanguage(filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase() || '';
-  const languageMap: Record<string, string> = {
-    js: 'javascript',
-    jsx: 'javascript',
-    ts: 'typescript',
-    tsx: 'typescript',
-    json: 'json',
-    html: 'html',
-    css: 'css',
-    scss: 'scss',
-    md: 'markdown',
-    py: 'python',
-    rb: 'ruby',
-    go: 'go',
-    rs: 'rust',
-    java: 'java',
-    c: 'c',
-    cpp: 'cpp',
-    h: 'c',
-    hpp: 'cpp',
-    yaml: 'yaml',
-    yml: 'yaml',
-    xml: 'xml',
-    sql: 'sql',
-    sh: 'shell',
-    bash: 'shell',
-  };
-  return languageMap[ext] || 'plaintext';
-}
-
-// Handle Monaco editor mount and define theme
-const handleEditorWillMount = (monaco: Monaco) => {
-  monaco.editor.defineTheme('monokai', monokaiTheme as any);
-};
-
-export function CodeEditor({ file, className, onContentChange }: CodeEditorProps) {
-  if (!file) {
+  loading: boolean;
+  error: string | null;
+}) {
+  if (!file)
     return (
-      <div
-        className={cn(
-          'flex h-full items-center justify-center text-muted-foreground',
-          className
-        )}
-        style={{ backgroundColor: monokaiColors.background }}
-      >
-        <div className="text-center">
-          <p className="text-sm" style={{ color: monokaiColors.comment }}>Select a file to view its content</p>
-        </div>
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+        <FileCode2 className="size-6" />
+        <p className="text-sm">Choose a file to explore the code.</p>
       </div>
     );
-  }
-
-  const language = getLanguage(file.name);
-
+  const languages: Record<string, string> = {
+    ts: "typescript",
+    tsx: "typescript",
+    js: "javascript",
+    jsx: "javascript",
+    json: "json",
+    css: "css",
+    html: "html",
+    md: "markdown",
+    toml: "ini",
+    yml: "yaml",
+    yaml: "yaml",
+  };
   return (
-    <div className={cn('h-full flex flex-col', className)}>
-      {/* File header - Monokai styled */}
-      <div
-        className="flex h-10 items-center border-b px-3"
-        style={{
-          backgroundColor: monokaiColors.background,
-          borderColor: monokaiColors.border,
-        }}
-      >
-        <span className="text-sm font-medium" style={{ color: monokaiColors.foreground }}>{file.path}</span>
+    <div className="flex h-full min-w-0 flex-col">
+      <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b px-3">
+        <span className="truncate font-mono text-xs">{file.path}</span>
+        <span className="shrink-0 text-xs text-muted-foreground">
+          Read only
+        </span>
       </div>
-
-      {/* Editor */}
-      <div className="flex-1">
-        <Editor
-          height="100%"
-          language={language}
-          value={file.content || '// Loading...'}
-          theme="monokai"
-          beforeMount={handleEditorWillMount}
-          options={{
-            readOnly: true,
-            minimap: { enabled: false },
-            fontSize: 13,
-            lineNumbers: 'on',
-            scrollBeyondLastLine: false,
-            wordWrap: 'on',
-            automaticLayout: true,
-            padding: { top: 12 },
-            fontFamily: "'Fira Code', 'JetBrains Mono', 'Cascadia Code', Consolas, monospace",
-            fontLigatures: true,
-            renderLineHighlight: 'all',
-            cursorBlinking: 'smooth',
-            smoothScrolling: true,
-          }}
-          onChange={(value: string | undefined) => {
-            if (value && onContentChange) {
-              onContentChange(value);
+      {error ? (
+        <p role="alert" className="p-5 text-sm text-destructive">
+          {error}
+        </p>
+      ) : loading ? (
+        <div
+          role="status"
+          className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground"
+        >
+          <LoaderCircle className="size-4 animate-spin" />
+          Loading file…
+        </div>
+      ) : (
+        <div className="min-h-0 flex-1">
+          <Editor
+            height="100%"
+            path={file.path}
+            language={
+              languages[file.name.split(".").pop() || ""] || "plaintext"
             }
-          }}
-        />
-      </div>
+            value={file.content ?? ""}
+            theme="vs"
+            loading={
+              <span className="text-sm text-muted-foreground">
+                Loading code viewer…
+              </span>
+            }
+            options={{
+              readOnly: true,
+              minimap: { enabled: false },
+              fontSize: 12,
+              lineNumbers: "on",
+              scrollBeyondLastLine: false,
+              wordWrap: "on",
+              automaticLayout: true,
+              padding: { top: 16 },
+              fontFamily: "var(--font-geist-mono), monospace",
+              smoothScrolling: false,
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }

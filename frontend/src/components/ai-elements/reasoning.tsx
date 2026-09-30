@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/set-state-in-effect -- Registry component tracks duration across external streaming transitions. */
 "use client";
 
 import { useControllableState } from "@radix-ui/react-use-controllable-state";

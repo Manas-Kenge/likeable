@@ -1,678 +1,333 @@
-'use client';
+"use client";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, type Project } from "@/lib/api";
+import type { Activity, ChatMessage, FileNode, PreviewTab } from "./types";
 
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { api } from '@/lib/api';
-import type {
-  ChatMessage,
-  FileNode,
-  Project,
-  PreviewTab,
-  WorkspaceState,
-  ReasoningStep,
-  StreamEvent,
-} from './types';
-
-// Helper to get initial state, checking sessionStorage for pending prompt
-function getInitialState(): WorkspaceState & { pendingPrompt: string | null } {
-  // Check for pending prompt from navigation (only on client)
-  const pendingPrompt = typeof window !== 'undefined'
-    ? sessionStorage.getItem('pendingPrompt')
-    : null;
-
-  if (pendingPrompt) {
-    // Clear it immediately to prevent re-use on refresh
-    sessionStorage.removeItem('pendingPrompt');
-
-    // Return initial state with user message + analyzing assistant message
-    return {
-      project: null,
-      messages: [
-        {
-          id: 'msg-pending-1',
-          role: 'user',
-          content: pendingPrompt,
-          timestamp: new Date(),
-          status: 'complete',
-        },
-        {
-          id: 'msg-pending-2',
-          role: 'assistant',
-          content: '',
-          timestamp: new Date(),
-          status: 'streaming',
-          reasoning: [{
-            id: 'reason-initial',
-            type: 'thinking',
-            status: 'active',
-            label: 'Analyzing your request...',
-            timestamp: new Date(),
-          }],
-        },
-      ],
-      files: [],
-      selectedFile: null,
-      activeTab: 'preview',
-      isLoading: true,
-      previewUrl: null,
-      pendingPrompt,
-    };
-  }
-
-  // Default empty state
-  return {
-    project: null,
-    messages: [],
-    files: [],
-    selectedFile: null,
-    activeTab: 'preview',
-    isLoading: false,
-    previewUrl: null,
-    pendingPrompt: null,
-  };
-}
-
-export function useWorkspace(projectId?: string) {
-  // Use lazy initializer to check sessionStorage on first render
-  const [initialData] = useState(getInitialState);
-  const [state, setState] = useState<WorkspaceState>({
-    project: initialData.project,
-    messages: initialData.messages,
-    files: initialData.files,
-    selectedFile: initialData.selectedFile,
-    activeTab: initialData.activeTab,
-    isLoading: initialData.isLoading,
-    previewUrl: initialData.previewUrl,
-    previewReloadTrigger: 0,
-  });
-
-  // Store pending prompt for use in loadProject
-  const pendingPromptRef = useRef<string | null>(initialData.pendingPrompt);
-  const messageIdCounter = useRef(10); // Start at 10 to avoid conflicts with pending messages
-  const reasoningIdCounter = useRef(0);
-  const initialLoadStarted = useRef(false);
-
-  // Process streaming response for a message
-  const processStream = useCallback(async (
-    projectId: string,
-    message: string,
-    assistantMessageId: string
-  ) => {
-    try {
-      const streamGenerator = api.streamMessage(projectId, message);
-      const allChanges: { path: string; action: 'create' | 'update' | 'delete' }[] = [];
-
-      for await (const chunk of streamGenerator) {
-        try {
-          const event: StreamEvent = JSON.parse(chunk);
-
-          switch (event.type) {
-            case 'thinking': {
-              const thinkingData = event.data as { message?: string };
-              setState((prev) => ({
-                ...prev,
-                messages: prev.messages.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? {
-                        ...msg,
-                        reasoning: markPreviousComplete(msg.reasoning || [], {
-                          id: `reason-${++reasoningIdCounter.current}`,
-                          type: 'thinking',
-                          status: 'active',
-                          label: thinkingData?.message || 'Thinking...',
-                          timestamp: new Date(),
-                        }),
-                      }
-                    : msg
-                ),
-              }));
-              break;
-            }
-
-            case 'plan': {
-              const plan = Array.isArray(event.data) ? event.data : [];
-              setState((prev) => ({
-                ...prev,
-                messages: prev.messages.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? {
-                        ...msg,
-                        reasoning: markPreviousComplete(msg.reasoning || [], {
-                          id: `reason-${++reasoningIdCounter.current}`,
-                          type: 'thinking',
-                          status: 'complete',
-                          label: `Created ${plan.length} step plan`,
-                          description: plan.map((s, i) => `${i + 1}. ${s}`).join('\n'),
-                          timestamp: new Date(),
-                        }),
-                      }
-                    : msg
-                ),
-              }));
-              break;
-            }
-
-            case 'step': {
-              const stepData = event.data as { toolName?: string; path?: string; description?: string };
-              const toolName = stepData?.toolName ?? null;
-              const filePath = stepData?.path ?? null;
-
-              let label: string;
-              if (toolName === 'read_file' && filePath) {
-                label = `Reading ${filePath}`;
-              } else if (toolName === 'run_command') {
-                label = 'Running command';
-              } else if (toolName === 'list_files') {
-                label = 'Listing files';
-              } else if (toolName) {
-                label = filePath ? `${toolName}: ${filePath}` : toolName;
-              } else {
-                label = stepData?.description || 'Working...';
-              }
-
-              setState((prev) => ({
-                ...prev,
-                messages: prev.messages.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? {
-                        ...msg,
-                        reasoning: markPreviousComplete(msg.reasoning || [], {
-                          id: `reason-${++reasoningIdCounter.current}`,
-                          type: 'tool_call',
-                          status: 'active',
-                          label,
-                          toolName: toolName ?? undefined,
-                          filePath: filePath ?? undefined,
-                          timestamp: new Date(),
-                        }),
-                      }
-                    : msg
-                ),
-              }));
-              break;
-            }
-
-            case 'file_start': {
-              const fileData = event.data as { path?: string };
-              const filePath = fileData?.path || 'unknown';
-              setState((prev) => ({
-                ...prev,
-                messages: prev.messages.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? {
-                        ...msg,
-                        reasoning: [...(msg.reasoning || []), {
-                          id: `reason-${++reasoningIdCounter.current}`,
-                          type: 'file_working',
-                          status: 'active',
-                          label: `Writing ${filePath}...`,
-                          filePath,
-                          timestamp: new Date(),
-                        }],
-                      }
-                    : msg
-                ),
-              }));
-              break;
-            }
-
-            case 'file_complete': {
-              const fileData = event.data as { path?: string; action?: string };
-              const filePath = fileData?.path || '';
-              allChanges.push({ path: filePath, action: 'update' });
-
-              setState((prev) => ({
-                ...prev,
-                messages: prev.messages.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? {
-                        ...msg,
-                        changes: [...allChanges],
-                        reasoning: (msg.reasoning || []).map((r) =>
-                          r.filePath === filePath && r.type === 'file_working'
-                            ? { ...r, type: 'file_change' as const, status: 'complete' as const, label: `Updated ${filePath}` }
-                            : r
-                        ),
-                      }
-                    : msg
-                ),
-              }));
-              break;
-            }
-
-            case 'files': {
-              const files = Array.isArray(event.data) ? event.data : [];
-              files.forEach((file) => {
-                allChanges.push({ path: file, action: 'update' });
-              });
-              // Don't add a separate reasoning step - file_start/file_complete handle it
-              break;
-            }
-
-            case 'done': {
-              setState((prev) => ({
-                ...prev,
-                messages: prev.messages.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? {
-                        ...msg,
-                        content: 'Completed all tasks',
-                        status: 'complete' as const,
-                        changes: [...allChanges],
-                        reasoning: (msg.reasoning || []).map((r) => ({
-                          ...r,
-                          status: 'complete' as const,
-                        })),
-                      }
-                    : msg
-                ),
-                isLoading: false,
-              }));
-
-              // Refresh file tree after changes
-              if (allChanges.length > 0) {
-                const filesRes = await api.getProjectFiles(projectId);
-                if (filesRes.success) {
-                  setState((prev) => ({
-                    ...prev,
-                    files: buildFileTree(filesRes.data || []),
-                  }));
-                }
-              }
-
-              // Preview reload is now handled by the 'preview_ready' event from backend
-              // which waits for the dev server to actually be ready
-              break;
-            }
-
-            case 'preview_ready': {
-              setState((prev) => ({
-                ...prev,
-                previewReloadTrigger: (prev.previewReloadTrigger || 0) + 1,
-              }));
-              break;
-            }
-
-            case 'error': {
-              const errMsg = (event.data as { message?: string })?.message || 'An error occurred';
-              setState((prev) => ({
-                ...prev,
-                messages: prev.messages.map((msg) =>
-                  msg.id === assistantMessageId
-                    ? {
-                        ...msg,
-                        content: errMsg,
-                        status: 'error' as const,
-                      }
-                    : msg
-                ),
-                isLoading: false,
-              }));
-              break;
-            }
-          }
-        } catch {
-          // Skip invalid JSON chunks
-        }
-      }
-
-      // Ensure we mark as complete even if no done event
-      setState((prev) => ({
-        ...prev,
-        messages: prev.messages.map((msg) =>
-          msg.id === assistantMessageId && msg.status === 'streaming'
-            ? {
-                ...msg,
-                content: msg.content || 'Completed',
-                status: 'complete' as const,
-              }
-            : msg
-        ),
-        isLoading: false,
-      }));
-    } catch (error) {
-      console.error('Stream processing failed:', error);
-      setState((prev) => ({
-        ...prev,
-        messages: prev.messages.map((msg) =>
-          msg.id === assistantMessageId
-            ? {
-                ...msg,
-                content: 'Failed to get response. Please try again.',
-                status: 'error' as const,
-              }
-            : msg
-        ),
-        isLoading: false,
-      }));
-    }
-  }, []);
-
-  // Load project data
-  const loadProject = useCallback(async (id: string) => {
-    // Check if we have a pending prompt from sessionStorage
-    const hasPendingPrompt = pendingPromptRef.current !== null;
-    const pendingPrompt = pendingPromptRef.current;
-
-    // If no pending prompt, set loading state
-    if (!hasPendingPrompt) {
-      setState((prev) => ({ ...prev, isLoading: true }));
-    }
-
-    try {
-      const [projectRes, filesRes] = await Promise.all([
-        api.getProject(id),
-        api.getProjectFiles(id),
-      ]);
-
-      if (projectRes.success && projectRes.data) {
-        const projectData = projectRes.data;
-        const project: Project = {
-          id: projectData.id,
-          name: projectData.name,
-          previewUrl: projectData.previewUrl,
-          status: projectData.status,
-        };
-
-        // Convert file paths to FileNode tree
-        const files = buildFileTree(filesRes.data || []);
-
-        // Check project context for initial prompt info
-        const context = projectData.context as Record<string, unknown> | undefined;
-        const initialPrompt = context?.initialPrompt as string | undefined;
-        const hasReceivedMessage = context?.hasReceivedMessage as boolean | undefined;
-
-        // Case 1: We have a pending prompt from sessionStorage (immediate display)
-        if (hasPendingPrompt && pendingPrompt) {
-
-          // Clear the ref
-          pendingPromptRef.current = null;
-
-          // Update state with project/files, keep existing messages
-          setState((prev) => ({
-            ...prev,
-            project,
-            files,
-            previewUrl: project.previewUrl || null,
-          }));
-
-          // Start streaming with the pending assistant message ID
-          processStream(id, pendingPrompt, 'msg-pending-2');
-        }
-        // Case 2: Initial prompt exists but hasn't been processed (fallback for direct URL access)
-        else if (initialPrompt && !hasReceivedMessage) {
-
-          const userMessageId = `msg-${++messageIdCounter.current}`;
-          const assistantMessageId = `msg-${++messageIdCounter.current}`;
-
-          const initialMessages: ChatMessage[] = [
-            {
-              id: userMessageId,
-              role: 'user',
-              content: initialPrompt,
-              timestamp: new Date(projectData.createdAt),
-              status: 'complete',
-            },
-            {
-              id: assistantMessageId,
-              role: 'assistant',
-              content: '',
-              timestamp: new Date(),
-              status: 'streaming',
-              reasoning: [{
-                id: 'reason-initial',
-                type: 'thinking',
-                status: 'active',
-                label: 'Analyzing your request...',
-                timestamp: new Date(),
-              }],
-            },
-          ];
-
-          setState((prev) => ({
-            ...prev,
-            project,
-            files,
-            messages: initialMessages,
-            previewUrl: project.previewUrl || null,
-            isLoading: true,
-          }));
-
-          // Start streaming the initial prompt
-          processStream(id, initialPrompt, assistantMessageId);
-        }
-        // Case 3: Already processed - just show the user message
-        else if (initialPrompt && hasReceivedMessage) {
-          const initialMessages: ChatMessage[] = [
-            {
-              id: `msg-${++messageIdCounter.current}`,
-              role: 'user',
-              content: initialPrompt,
-              timestamp: new Date(projectData.createdAt),
-              status: 'complete',
-            },
-          ];
-
-          setState((prev) => ({
-            ...prev,
-            project,
-            files,
-            messages: initialMessages,
-            previewUrl: project.previewUrl || null,
-            isLoading: false,
-          }));
-        }
-        // Case 4: No initial prompt
-        else {
-          setState((prev) => ({
-            ...prev,
-            project,
-            files,
-            previewUrl: project.previewUrl || null,
-            isLoading: false,
-          }));
-        }
-      } else {
-        console.error(`[useWorkspace] Project response not successful:`, projectRes.error);
-        setState((prev) => ({ ...prev, isLoading: false }));
-      }
-    } catch (error) {
-      console.error('[useWorkspace] Failed to load project:', error);
-      setState((prev) => ({ ...prev, isLoading: false }));
-    }
-  }, [processStream]);
-
-  // Create new project
-  const createProject = useCallback(async (name: string) => {
-    setState((prev) => ({ ...prev, isLoading: true }));
-
-    try {
-      const response = await api.createProject({ name });
-
-      if (response.success && response.data) {
-        const project: Project = {
-          id: response.data.id,
-          name: response.data.name,
-          previewUrl: response.data.previewUrl,
-          status: response.data.status,
-        };
-
-        setState((prev) => ({
-          ...prev,
-          project,
-          previewUrl: project.previewUrl || null,
-          isLoading: false,
-        }));
-
-        return project;
-      }
-    } catch (error) {
-      console.error('Failed to create project:', error);
-    }
-
-    setState((prev) => ({ ...prev, isLoading: false }));
-    return null;
-  }, []);
-
-  // Send message to AI with streaming
-  const sendMessage = useCallback(
-    async (content: string) => {
-      if (!state.project) return;
-
-      const userMessageId = `msg-${++messageIdCounter.current}`;
-      const assistantMessageId = `msg-${++messageIdCounter.current}`;
-
-      // Add user message
-      const userMessage: ChatMessage = {
-        id: userMessageId,
-        role: 'user',
-        content,
-        timestamp: new Date(),
-        status: 'complete',
-      };
-
-      // Add pending assistant message with analyzing reasoning
-      const assistantMessage: ChatMessage = {
-        id: assistantMessageId,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date(),
-        status: 'streaming',
-        reasoning: [{
-          id: 'reason-initial',
-          type: 'thinking',
-          status: 'active',
-          label: 'Analyzing your request...',
-          timestamp: new Date(),
-        }],
-        changes: [],
-      };
-
-      setState((prev) => ({
-        ...prev,
-        messages: [...prev.messages, userMessage, assistantMessage],
-        isLoading: true,
-      }));
-
-      // Use the shared processStream function
-      await processStream(state.project.id, content, assistantMessageId);
-    },
-    [state.project, processStream]
-  );
-
-  // Select file and load content
-  const selectFile = useCallback(
-    async (file: FileNode) => {
-      if (file.isFolder || !state.project) return;
-
-      setState((prev) => ({ ...prev, selectedFile: file, activeTab: 'code' }));
-
-      // Load file content if not already loaded
-      if (!file.content) {
-        try {
-          const response = await api.getFileContent(state.project.id, file.path);
-          if (response.success && response.data) {
-            setState((prev) => ({
-              ...prev,
-              selectedFile: { ...file, content: response.data!.content },
-              files: updateFileContent(prev.files, file.path, response.data!.content),
-            }));
-          }
-        } catch (error) {
-          console.error('Failed to load file content:', error);
-        }
-      }
-    },
-    [state.project]
-  );
-
-  // Set active tab
-  const setActiveTab = useCallback((tab: PreviewTab) => {
-    setState((prev) => ({ ...prev, activeTab: tab }));
-  }, []);
-
-  // Load project on mount
-  useEffect(() => {
-    if (projectId && !initialLoadStarted.current) {
-      initialLoadStarted.current = true;
-      loadProject(projectId);
-    }
-  }, [projectId, loadProject]);
-
-  return {
-    ...state,
-    loadProject,
-    createProject,
-    sendMessage,
-    selectFile,
-    setActiveTab,
-  };
-}
-
-// Helper: Mark previous reasoning steps as complete and add new one
-function markPreviousComplete(
-  reasoning: ReasoningStep[],
-  newStep: ReasoningStep
-): ReasoningStep[] {
-  return [
-    ...reasoning.map((r) => ({ ...r, status: 'complete' as const })),
-    newStep,
-  ];
-}
-
-// Helper: Build file tree from flat paths
-function buildFileTree(paths: string[]): FileNode[] {
+function buildTree(paths: string[]): FileNode[] {
   const root: FileNode[] = [];
-  const nodeMap = new Map<string, FileNode>();
-
-  // Sort paths to ensure parent directories come first
-  const sortedPaths = [...paths].sort();
-
-  for (const path of sortedPaths) {
-    const parts = path.split('/').filter(Boolean);
-    let currentPath = '';
-    let currentLevel = root;
-
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      const isLast = i === parts.length - 1;
-      currentPath = currentPath ? `${currentPath}/${part}` : part;
-
-      let node = nodeMap.get(currentPath);
-
+  for (const path of [...paths].sort()) {
+    let children = root;
+    const parts = path.split("/");
+    parts.forEach((name, index) => {
+      const itemPath = parts.slice(0, index + 1).join("/");
+      let node = children.find((item) => item.path === itemPath);
       if (!node) {
         node = {
-          id: currentPath,
-          name: part,
-          path: currentPath,
-          isFolder: !isLast,
-          children: isLast ? undefined : [],
+          id: itemPath,
+          path: itemPath,
+          name,
+          isFolder: index < parts.length - 1,
+          children: index < parts.length - 1 ? [] : undefined,
         };
-        nodeMap.set(currentPath, node);
-        currentLevel.push(node);
+        children.push(node);
       }
-
-      if (!isLast && node.children) {
-        currentLevel = node.children;
-      }
-    }
+      if (node.children) children = node.children;
+    });
   }
-
   return root;
 }
 
-// Helper: Update file content in tree
-function updateFileContent(
-  files: FileNode[],
-  path: string,
-  content: string
-): FileNode[] {
-  return files.map((file) => {
-    if (file.path === path) {
-      return { ...file, content };
+export function useWorkspace(projectId?: string) {
+  const [project, setProject] = useState<Project | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [files, setFiles] = useState<FileNode[]>([]);
+  const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
+  const [activeTab, setActiveTab] = useState<PreviewTab>("preview");
+  const [mobileTab, setMobileTab] = useState<"chat" | PreviewTab>("chat");
+  const [loadingProject, setLoadingProject] = useState(true);
+  const [generating, setGenerating] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [previewReloadTrigger, setPreviewReloadTrigger] = useState(0);
+  const projectRef = useRef<Project | null>(null);
+  const runRef = useRef(false);
+  const started = useRef(false);
+  const fileRequest = useRef(0);
+  const selectedRef = useRef<FileNode | null>(null);
+  const activityRef = useRef<Activity[]>([]);
+
+  const applyProject = useCallback((data: Project) => {
+    projectRef.current = data;
+    setProject(data);
+    setFiles(buildTree(data.files));
+    setMessages((previous) =>
+      data.messages.map((message) => ({
+        ...message,
+        activity: previous.find((item) => item.id === message.id)?.activity,
+      })),
+    );
+    setGenerating(data.generationStatus === "running");
+  }, []);
+
+  const selectFile = useCallback(async (file: FileNode, activate = true) => {
+    if (!projectRef.current) return;
+    const request = ++fileRequest.current;
+    selectedRef.current = file;
+    setSelectedFile({ ...file, content: undefined });
+    setFileLoading(true);
+    setFileError(null);
+    if (activate) {
+      setActiveTab("code");
+      setMobileTab("code");
     }
-    if (file.children) {
-      return { ...file, children: updateFileContent(file.children, path, content) };
+    const result = await api.getFileContent(projectRef.current.id, file.path);
+    if (request !== fileRequest.current) return;
+    if (result.success && result.data) {
+      const next = { ...file, content: result.data.content };
+      selectedRef.current = next;
+      setSelectedFile(next);
+    } else
+      setFileError(
+        result.error || "File could not be loaded. Select it to try again.",
+      );
+    setFileLoading(false);
+  }, []);
+
+  const sendMessage = useCallback(
+    async (text: string, initial = false) => {
+      const current = projectRef.current;
+      if (
+        !current ||
+        runRef.current ||
+        current.status !== "running" ||
+        current.generationStatus === "running"
+      )
+        return;
+      runRef.current = true;
+      setGenerating(true);
+      setError(null);
+      activityRef.current = [];
+      const runId = crypto.randomUUID();
+      const assistantId = `draft-${runId}`;
+      const timestamp = new Date().toISOString();
+      setMessages((previous) => [
+        ...previous,
+        {
+          id: `user-${runId}`,
+          role: "user",
+          content: text,
+          timestamp,
+          status: "complete",
+          runId,
+          changes: [],
+        },
+        {
+          id: assistantId,
+          role: "assistant",
+          content: "",
+          timestamp,
+          status: "streaming",
+          runId,
+          changes: [],
+          activity: [],
+        },
+      ]);
+      const updateAssistant = (update: Partial<ChatMessage>) =>
+        setMessages((previous) =>
+          previous.map((message) =>
+            message.id === assistantId ? { ...message, ...update } : message,
+          ),
+        );
+      let changes: ChatMessage["changes"] = [];
+      let terminalRunId: string | undefined;
+      function activity(label: string) {
+        activityRef.current = [
+          ...activityRef.current.map((item) => ({
+            ...item,
+            status: "complete" as const,
+          })),
+          { id: crypto.randomUUID(), label, status: "active" },
+        ];
+        updateAssistant({ activity: [...activityRef.current] });
+      }
+      try {
+        for await (const event of api.streamMessage(current.id, text, {
+          initial,
+        })) {
+          switch (event.type) {
+            case "thinking":
+              activity(event.data.message);
+              break;
+            case "plan":
+              activity(`Plan: ${event.data.join(" · ")}`);
+              break;
+            case "step":
+              activity(
+                event.data.path
+                  ? `Reading ${event.data.path}`
+                  : event.data.toolName === "run_command"
+                    ? "Running command"
+                    : "Exploring project files",
+              );
+              break;
+            case "file_start":
+              activity(`Writing ${event.data.path}`);
+              break;
+            case "file_complete":
+              changes = [
+                ...changes.filter((change) => change.path !== event.data.path),
+                event.data,
+              ];
+              updateAssistant({ changes });
+              break;
+            case "validating":
+              activity(event.data.message);
+              break;
+            case "message":
+              updateAssistant({ content: event.data.text });
+              break;
+            case "preview_ready":
+              setPreviewReloadTrigger((value) => value + 1);
+              break;
+            case "done":
+              terminalRunId = event.data.runId;
+              updateAssistant({
+                content: event.data.text,
+                status: "complete",
+                activity: activityRef.current.map((item) => ({
+                  ...item,
+                  status: "complete",
+                })),
+              });
+              break;
+            case "error":
+              updateAssistant({
+                content: event.data.message,
+                status: "error",
+                activity: activityRef.current.map((item) => ({
+                  ...item,
+                  status: "error",
+                })),
+              });
+              break;
+          }
+        }
+      } catch (cause) {
+        const message =
+          cause instanceof Error
+            ? cause.message
+            : "Generation was interrupted. Try again.";
+        updateAssistant({ content: message, status: "error", changes });
+        setError(message);
+      } finally {
+        const result = await api.getProject(current.id);
+        if (result.success && result.data) {
+          applyProject(result.data);
+          setMessages((previous) =>
+            previous.map((message) =>
+              message.role === "assistant" &&
+              (message.runId === terminalRunId ||
+                message.id === result.data?.messages.at(-1)?.id)
+                ? {
+                    ...message,
+                    activity: activityRef.current.map((item) => ({
+                      ...item,
+                      status: message.status === "error" ? "error" : "complete",
+                    })),
+                  }
+                : message,
+            ),
+          );
+          if (selectedRef.current) void selectFile(selectedRef.current, false);
+        } else {
+          setGenerating(false);
+          setError(
+            result.error ||
+              "Could not refresh the project. Reload to check its state.",
+          );
+        }
+        runRef.current = false;
+      }
+    },
+    [applyProject, selectFile],
+  );
+
+  const loadProject = useCallback(
+    async (autoStart = false) => {
+      if (!projectId) return;
+      setLoadingProject(true);
+      setError(null);
+      const result = await api.getProject(projectId);
+      if (result.success && result.data) {
+        applyProject(result.data);
+        if (
+          autoStart &&
+          result.data.initialPrompt &&
+          !result.data.initialRunId &&
+          result.data.status === "running"
+        )
+          void sendMessage(result.data.initialPrompt, true);
+      } else setError(result.error || "Project could not be loaded.");
+      setLoadingProject(false);
+    },
+    [projectId, applyProject, sendMessage],
+  );
+
+  useEffect(() => {
+    if (!started.current) {
+      started.current = true;
+      void loadProject(true);
     }
-    return file;
-  });
+  }, [loadProject]);
+  useEffect(() => {
+    if (!generating) return;
+    const timer = setInterval(async () => {
+      if (runRef.current || !projectId) return;
+      const result = await api.getProject(projectId);
+      if (result.success && result.data) applyProject(result.data);
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [generating, projectId, applyProject]);
+
+  const resumeProject = useCallback(async () => {
+    if (!projectId || runRef.current) return;
+    setResuming(true);
+    setError(null);
+    const result = await api.resumeProject(projectId);
+    if (result.success && result.data) {
+      applyProject(result.data);
+      setPreviewReloadTrigger((value) => value + 1);
+      if (result.data.initialPrompt && !result.data.initialRunId)
+        void sendMessage(result.data.initialPrompt, true);
+    } else setError(result.error || "Project could not be reopened.");
+    setResuming(false);
+  }, [projectId, applyProject, sendMessage]);
+
+  function selectPath(path: string) {
+    void selectFile({
+      id: path,
+      name: path.split("/").pop() || path,
+      path,
+      isFolder: false,
+    });
+  }
+  function changeTab(tab: PreviewTab) {
+    setActiveTab(tab);
+    setMobileTab(tab);
+  }
+  return {
+    project,
+    messages,
+    files,
+    selectedFile,
+    activeTab,
+    mobileTab,
+    loadingProject,
+    generating,
+    resuming,
+    error,
+    fileLoading,
+    fileError,
+    previewReloadTrigger,
+    sendMessage,
+    selectFile,
+    selectPath,
+    changeTab,
+    setMobileTab,
+    loadProject,
+    resumeProject,
+    setError,
+  };
 }

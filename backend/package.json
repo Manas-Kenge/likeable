@@ -5,7 +5,9 @@
   "private": true,
   "scripts": {
     "dev": "bun run --watch index.ts",
-    "start": "bun run index.ts"
+    "start": "bun run index.ts",
+    "test": "bun test tests",
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -23,6 +25,7 @@
     "dotenv": "^17.2.3",
     "e2b": "^2.7.0",
     "express": "^5.1.0",
+    "fflate": "^0.8.3",
     "uuid": "^13.0.0",
     "zhipu-ai-provider": "^0.2.2",
     "zod": "^4.1.12"

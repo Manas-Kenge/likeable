@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/static-components -- Registry component supports a polymorphic motion element. */
 "use client";
 
 import { cn } from "@/lib/utils";

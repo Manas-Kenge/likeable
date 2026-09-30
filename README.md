@@ -12,7 +12,10 @@ https://github.com/user-attachments/assets/f7f36797-dd1d-4649-a69b-d97263d7a25a
 - **Real-Time Preview** - See your application update live as code is generated
 - **Isolated Sandboxes** - Each project runs in its own secure E2B cloud environment
 - **Streaming Responses** - Watch AI reasoning and code generation step-by-step
-- **Full Code Editor** - Monaco-based editor with syntax highlighting and file explorer
+- **Code Inspection** - Read-only Monaco viewer with file explorer and links to changed files
+- **Saved Projects** - Local SQLite persistence for conversations and source files, with sandbox recovery
+- **Source Export** - Download project source as a ZIP
+- **Build Validation** - Check generated code before reporting success; retain failed changes for retry
 
 ## Architecture
 
@@ -20,7 +23,7 @@ https://github.com/user-attachments/assets/f7f36797-dd1d-4649-a69b-d97263d7a25a
 ┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐
 │    Frontend     │────▶│       Backend        │────▶│    E2B Sandbox      │
 │   (Next.js)     │◀────│   (Bun + Express)    │◀────│   (Vite + React)    │
-│   Port 3000     │ SSE │      Port 8080       │     │   Live Preview      │
+│   Port 3000     │ SSE │      Port 3001       │     │   Live Preview      │
 └─────────────────┘     └──────────────────────┘     └─────────────────────┘
                                │
                         ┌──────────────┐
@@ -52,7 +55,8 @@ https://github.com/user-attachments/assets/f7f36797-dd1d-4649-a69b-d97263d7a25a
 ├── backend/
 │   ├── src/
 │   │   ├── graph.ts          # AI SDK streaming chat orchestration
-│   │   ├── project-service.ts # Sandbox lifecycle management
+│   │   ├── project-service.ts # Sandbox lifecycle and persisted generation runs
+│   │   ├── store.ts          # SQLite project/message/source storage
 │   │   ├── prompt.ts         # AI system prompts
 │   │   └── tools.ts          # AI tool definitions
 │   ├── my-app/               # Template app for sandboxes
@@ -71,7 +75,7 @@ https://github.com/user-attachments/assets/f7f36797-dd1d-4649-a69b-d97263d7a25a
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 18+
+- [Node.js](https://nodejs.org/) 20.9+
 - [Bun](https://bun.sh/) runtime
 - [E2B](https://e2b.dev/) account and API key
 - [Z.ai](https://z.ai/) API key (ZhipuAI GLM-4.7)
@@ -80,7 +84,7 @@ https://github.com/user-attachments/assets/f7f36797-dd1d-4649-a69b-d97263d7a25a
 
 ```bash
 git clone <repository-url>
-cd lovable
+cd likeable
 ```
 
 Create `backend/.env`:
@@ -89,7 +93,8 @@ Create `backend/.env`:
 # Required
 E2B_API_KEY="your-e2b-api-key"
 ZAI_API_KEY="your-zai-api-key"
-E2B_TEMPLATE_ID="lovable-clone-dev"
+E2B_TEMPLATE_ID="your-accessible-template-id"
+PORT=3001
 ```
 
 ### 2. Start Backend
@@ -106,19 +111,21 @@ Backend runs on `http://localhost:3001`
 
 ```bash
 cd frontend
-npm install
-npm run dev
+bun install --frozen-lockfile
+bun run dev
 ```
+
+Optionally set `BACKEND_URL=http://localhost:3001` in `frontend/.env.local` (this is the default).
 
 Frontend runs on `http://localhost:3000`
 
-### 4. Build E2B Template (Optional)
+### 4. E2B Template Access
 
-If you need to customize the sandbox environment:
+Your account must have access to the template set in `E2B_TEMPLATE_ID`. The checked-in `backend/e2b.toml` contains existing account identifiers; configure your own template if it is not accessible. To build the supplied starter:
 
 ```bash
 cd backend
-e2b template build
+bunx e2b template build
 ```
 
 ## API Reference
@@ -132,6 +139,10 @@ e2b template build
 | `POST` | `/project/chat/:id` | Send chat message (SSE streaming) |
 | `GET` | `/project/:id/files` | List project files |
 | `GET` | `/project/:id/file?path=` | Read file content |
+| `POST` | `/project/:id/resume` | Restore/reopen a sandbox |
+| `GET` | `/project/:id/export` | Download current source ZIP |
+
+Projects are saved in `backend/.data/likeable.sqlite`. Run one backend process per database. Sandboxes expire after 15 minutes; reopen a project to restore its saved source. AI and sandbox services still require internet access. See [backend setup and behavior](backend/README.md) for details.
 
 ## Development
 
@@ -140,7 +151,9 @@ e2b template build
 | Directory | Command | Description |
 |-----------|---------|-------------|
 | `backend/` | `bun run dev` | Start backend (watch mode) |
-| `backend/` | `bun run start` | Start backend (production) |
+| `backend/` | `bun run start` | Start backend |
+| `backend/` | `bun run test` | Run automated tests |
+| `backend/` | `bun run typecheck` | Check backend types |
 | `frontend/` | `npm run dev` | Start frontend dev server |
 | `frontend/` | `npm run build` | Production build |
 | `frontend/` | `npm run lint` | Run ESLint |
@@ -150,7 +163,7 @@ e2b template build
 - TypeScript strict mode
 - Double quotes, semicolons, 2-space indent
 - `import type` for type-only imports
-- See `AGENTS.md` for full conventions
+- Shared API contracts are defined in `shared/types.ts`
 
 ## License
 

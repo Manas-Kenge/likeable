@@ -1,188 +1,213 @@
 "use client";
-
-import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  PromptInput,
-  type PromptInputMessage,
-  PromptInputSubmit,
-  PromptInputTextarea,
-} from "@/components/ai-elements/prompt-input";
-import { Message, MessageContent } from "@/components/ai-elements/message";
-import {
-  Conversation,
-  ConversationContent,
-} from "@/components/ai-elements/conversation";
-import { Loader } from "@/components/ai-elements/loader";
-import { Shimmer } from "@/components/ai-elements/shimmer";
-
-import {
-  ChainOfThought,
-  ChainOfThoughtHeader,
-  ChainOfThoughtContent,
-  ChainOfThoughtStep,
-} from "@/components/ai-elements/chain-of-thought";
-import { cn } from "@/lib/utils";
-import type { ChatMessage, ReasoningStep } from "./types";
-import {
-  BrainIcon,
-  WrenchIcon,
-  FileIcon,
-  CheckCircle2Icon,
-  Loader2Icon,
-  FileEditIcon,
-  FileSearchIcon,
-  TerminalIcon,
+  ArrowUp,
+  Check,
+  ChevronRight,
+  FileCode2,
+  LoaderCircle,
+  RotateCcw,
+  Sparkles,
 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { MessageResponse } from "@/components/ai-elements/message";
+import type { ChatMessage } from "./types";
 
-interface ChatPanelProps {
+interface Props {
   messages: ChatMessage[];
-  isLoading: boolean;
-  onSendMessage: (message: string) => void;
-  className?: string;
-  projectName?: string;
+  generating: boolean;
+  disabled: boolean;
+  onSendMessage: (text: string) => Promise<void>;
+  onRetry: (text: string) => void;
+  onSelectPath: (path: string) => void;
 }
-
-// Get icon for reasoning step — uses full step for per-tool-name icons
-function getStepIcon(step: ReasoningStep | string) {
-  const type = typeof step === 'string' ? step : step.type;
-  const toolName = typeof step === 'string' ? undefined : step.toolName;
-
-  if (type === 'tool_call') {
-    if (toolName === 'read_file' || toolName === 'list_files') return FileSearchIcon;
-    if (toolName === 'run_command') return TerminalIcon;
-    return WrenchIcon;
-  }
-  switch (type) {
-    case 'thinking': return BrainIcon;
-    case 'file_change': return FileIcon;
-    case 'file_working': return FileEditIcon;
-    default: return CheckCircle2Icon;
-  }
-}
-
-// Render step label with shimmer for active states
-function StepLabel({ step }: { step: ReasoningStep }) {
-  if (step.status === 'active') {
-    return <Shimmer duration={1.5}>{step.label}</Shimmer>;
-  }
-  return <span>{step.label}</span>;
-}
-
 export function ChatPanel({
   messages,
-  isLoading,
+  generating,
+  disabled,
   onSendMessage,
-  className,
-}: ChatPanelProps) {
-  const [inputValue, setInputValue] = useState("");
-
-  const handleSubmit = (promptMessage: PromptInputMessage) => {
-    const text = promptMessage.text?.trim();
-    if (!text || isLoading) return;
-
-    setInputValue("");
-    onSendMessage(text);
-  };
-
+  onRetry,
+  onSelectPath,
+}: Props) {
+  const [input, setInput] = useState("");
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "instant", block: "nearest" });
+  }, [messages]);
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!input.trim() || disabled || generating) return;
+    const prompt = input.trim();
+    setInput("");
+    await onSendMessage(prompt);
+  }
   return (
-    <div className={cn("flex h-full flex-col", className)}>
-      {/* Header */}
-      <Link href="/">
-        <div className="flex h-14 items-center justify-between border-b px-4">
-          <h1 className="text-lg font-semibold">Likeable</h1>
-        </div>
-      </Link>
-      {/* Messages */}
-      <div className="flex-1 overflow-hidden">
-        <Conversation className="h-full">
-          <ConversationContent>
-            {messages.map((msg) => (
-              <Message key={msg.id} from={msg.role}>
-                <MessageContent>
-                  {msg.status === "streaming" ? (
-                    <div className="space-y-3">
-                      {/* Chain of Thought for streaming messages */}
-                      {msg.reasoning && msg.reasoning.length > 0 && (
-                        <ChainOfThought defaultOpen={true}>
-                          <ChainOfThoughtHeader>
-                            <span className="flex items-center gap-2">
-                              <Loader2Icon className="size-3 animate-spin" />
-                              <Shimmer duration={2}>Working on your request...</Shimmer>
-                            </span>
-                          </ChainOfThoughtHeader>
-                          <ChainOfThoughtContent>
-                            {msg.reasoning.map((step) => (
-                              <ChainOfThoughtStep
-                                key={step.id}
-                                icon={getStepIcon(step)}
-                                label={<StepLabel step={step} />}
-                                description={step.description}
-                                status={step.status}
-                              />
-                            ))}
-                          </ChainOfThoughtContent>
-                        </ChainOfThought>
-                      )}
-                      {(!msg.reasoning || msg.reasoning.length === 0) && (
-                        <div className="flex items-center gap-2">
-                          <Loader />
-                          <Shimmer duration={1.5}>Thinking...</Shimmer>
-                        </div>
-                      )}
+    <div className="flex h-full min-h-0 flex-col bg-background">
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b px-4 text-xs font-medium text-muted-foreground">
+        <Sparkles className="size-3.5" />
+        Build conversation
+      </div>
+      <div
+        className="min-h-0 flex-1 overflow-y-auto px-4 py-5"
+        role="log"
+        aria-label="Build conversation"
+        aria-live="polite"
+      >
+        {messages.length === 0 ? (
+          <div className="py-12">
+            <span className="mb-4 flex size-9 items-center justify-center rounded-xl bg-muted">
+              <Sparkles className="size-4" />
+            </span>
+            <h2 className="text-sm font-semibold">What should we build?</h2>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Describe your app, or ask for a change to the current project.
+            </p>
+          </div>
+        ) : (
+          messages.map((message, index) => (
+            <article key={message.id} className="mb-6 min-w-0">
+              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                {message.role === "user" ? (
+                  "You"
+                ) : (
+                  <>
+                    <Sparkles className="size-3" />
+                    Likeable
+                  </>
+                )}
+                {message.status === "error" && (
+                  <span className="text-destructive">· Needs attention</span>
+                )}
+              </div>
+              {message.role === "user" ? (
+                <p className="whitespace-pre-wrap rounded-xl bg-muted/70 px-3.5 py-3 text-sm leading-6">
+                  {message.content}
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {message.activity?.length ? (
+                    <details
+                      open={message.status === "streaming"}
+                      className="rounded-xl border px-3 py-2.5"
+                    >
+                      <summary className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                        <ChevronRight className="size-3" />
+                        {message.status === "streaming"
+                          ? "Build activity"
+                          : "View build activity"}
+                      </summary>
+                      <ol className="mt-3 space-y-2.5">
+                        {message.activity.map((activity) => (
+                          <li
+                            key={activity.id}
+                            className="flex items-start gap-2 text-xs leading-5 text-muted-foreground"
+                          >
+                            {activity.status === "active" ? (
+                              <LoaderCircle className="mt-0.5 size-3.5 shrink-0 animate-spin" />
+                            ) : (
+                              <Check className="mt-0.5 size-3.5 shrink-0" />
+                            )}
+                            <span className="break-all">{activity.label}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
+                  ) : message.status === "streaming" ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <LoaderCircle className="size-4 animate-spin" />
+                      Working on your request…
                     </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {/* Chain of Thought for completed messages */}
-                      {msg.reasoning && msg.reasoning.length > 0 && (
-                        <ChainOfThought defaultOpen={false}>
-                          <ChainOfThoughtHeader>
-                            {msg.reasoning.length} step
-                            {msg.reasoning.length !== 1 ? "s" : ""} completed
-                          </ChainOfThoughtHeader>
-                          <ChainOfThoughtContent>
-                            {msg.reasoning.map((step) => (
-                              <ChainOfThoughtStep
-                                key={step.id}
-                                icon={getStepIcon(step)}
-                                label={step.label}
-                                description={step.description}
-                                status="complete"
-                              />
-                            ))}
-                          </ChainOfThoughtContent>
-                        </ChainOfThought>
-                      )}
-                      {/* Final message content */}
-                      <div>{msg.content}</div>
+                  ) : null}
+                  {message.content && (
+                    <div
+                      className={
+                        message.status === "error"
+                          ? "text-sm text-destructive"
+                          : "text-sm leading-6"
+                      }
+                    >
+                      <MessageResponse>{message.content}</MessageResponse>
                     </div>
                   )}
-                </MessageContent>
-              </Message>
-            ))}
-          </ConversationContent>
-        </Conversation>
+                  {message.changes.length > 0 && (
+                    <div className="space-y-1">
+                      {[
+                        ...new Set(
+                          message.changes.map((change) => change.path),
+                        ),
+                      ].map((path) => (
+                        <button
+                          key={path}
+                          onClick={() => onSelectPath(path)}
+                          className="flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
+                        >
+                          <FileCode2 className="size-3.5 shrink-0 text-muted-foreground" />
+                          <span className="truncate font-mono">{path}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  {message.status === "error" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={generating || disabled}
+                      onClick={() =>
+                        onRetry(
+                          messages
+                            .slice(0, index)
+                            .findLast((item) => item.role === "user")
+                            ?.content ||
+                            "Fix the build errors in this project.",
+                        )
+                      }
+                    >
+                      <RotateCcw className="size-3" />
+                      Retry request
+                    </Button>
+                  )}
+                </div>
+              )}
+            </article>
+          ))
+        )}
+        <div ref={endRef} />
       </div>
-
-      {/* Input area */}
-      <div className="p-4">
-        <PromptInput
-          onSubmit={handleSubmit}
-          className="w-full max-w-2xl mx-auto relative"
-        >
-          <PromptInputTextarea
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            placeholder="Describe what you want to build..."
-            className="min-h-[80px] flex items-center pt-[32px]"
+      <form onSubmit={submit} className="shrink-0 border-t p-3">
+        <div className="overflow-hidden rounded-xl border bg-card focus-within:ring-2 focus-within:ring-ring/30">
+          <label className="sr-only" htmlFor="chat-prompt">
+            Describe a change
+          </label>
+          <Textarea
+            id="chat-prompt"
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            placeholder="Describe an app or ask for a change…"
+            disabled={disabled || generating}
+            className="min-h-24 resize-none border-0 bg-transparent p-3 text-sm shadow-none focus-visible:ring-0"
           />
-          <PromptInputSubmit
-            className="absolute bottom-5 right-3"
-            disabled={!inputValue.trim() || isLoading}
-            status={isLoading ? "streaming" : "ready"}
-          />
-        </PromptInput>
-      </div>
+          <div className="flex items-center justify-between px-3 pb-2">
+            <span className="text-[11px] text-muted-foreground">
+              {generating
+                ? "Building your changes…"
+                : "Make it yours, one change at a time."}
+            </span>
+            <Button
+              type="submit"
+              size="icon-sm"
+              aria-label="Send message"
+              disabled={!input.trim() || generating || disabled}
+            >
+              {generating ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <ArrowUp className="size-4" />
+              )}
+            </Button>
+          </div>
+        </div>
+      </form>
     </div>
   );
 }
