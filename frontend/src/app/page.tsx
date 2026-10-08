@@ -5,31 +5,20 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowRight,
-  ArrowUp,
   Code2,
   FolderOpen,
   LoaderCircle,
-  Plus,
   Sparkles,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { ProjectComposer } from "@/components/project-composer";
 import { Badge } from "@/components/ui/badge";
 import { api, type Project } from "@/lib/api";
 
-const suggestions = [
-  "A landing page for a coffee shop",
-  "A dashboard to track my habits",
-  "A portfolio with a project gallery",
-];
-
 export default function HomePage() {
   const router = useRouter();
-  const [input, setInput] = useState("");
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
-  const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<string | null>(null);
 
   const loadProjects = useCallback(async () => {
@@ -58,27 +47,6 @@ export default function HomePage() {
       active = false;
     };
   }, []);
-
-  async function createProject(event: React.FormEvent) {
-    event.preventDefault();
-    if (!input.trim() || creating) return;
-    setCreating(true);
-    setError(null);
-    const text = input.trim();
-    const result = await api.createProject({
-      name: text.slice(0, 50),
-      description: text,
-      initialPrompt: text,
-    });
-    if (result.success && result.data) router.push(`/chat/${result.data.id}`);
-    else {
-      setError(
-        result.error ||
-          "Project could not be created. Your prompt is still here; try again.",
-      );
-      setCreating(false);
-    }
-  }
 
   return (
     <div className="min-h-dvh bg-background text-foreground">
@@ -114,63 +82,8 @@ export default function HomePage() {
             Describe what you want to build. Refine it together, explore the
             code, and make it your own.
           </p>
-          <form
-            onSubmit={createProject}
-            className="mt-9 overflow-hidden rounded-2xl border bg-card shadow-sm focus-within:ring-2 focus-within:ring-ring/30"
-          >
-            <label htmlFor="project-prompt" className="sr-only">
-              Describe the app you want to build
-            </label>
-            <Textarea
-              id="project-prompt"
-              value={input}
-              onChange={(event) => setInput(event.target.value)}
-              placeholder="What would you like to build? Be as specific as you like…"
-              disabled={creating}
-              className="min-h-32 resize-none border-0 bg-transparent p-5 text-base shadow-none focus-visible:ring-0"
-            />
-            <div className="flex items-center justify-between gap-3 px-5 pb-4">
-              <span className="text-xs text-muted-foreground">
-                Start with an idea. Iterate from there.
-              </span>
-              <Button
-                type="submit"
-                disabled={!input.trim() || creating}
-                className="shrink-0"
-              >
-                {creating ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <ArrowUp className="size-4" />
-                )}
-                {creating ? "Creating…" : "Build app"}
-              </Button>
-            </div>
-          </form>
-          {error && (
-            <div
-              role="alert"
-              className="mt-3 rounded-xl border border-destructive/20 bg-destructive/5 p-4 text-sm text-destructive"
-            >
-              {error}
-            </div>
-          )}
-          <div className="mt-4 flex flex-wrap gap-2">
-            {suggestions.map((suggestion) => (
-              <Button
-                key={suggestion}
-                variant="outline"
-                size="sm"
-                disabled={creating}
-                onClick={() => {
-                  setInput(suggestion);
-                  document.getElementById("project-prompt")?.focus();
-                }}
-              >
-                <Plus className="size-3" />
-                {suggestion}
-              </Button>
-            ))}
+          <div className="mt-9">
+            <ProjectComposer onCreated={(projectId) => router.push(`/chat/${projectId}`)} />
           </div>
         </section>
         <section className="border-t pt-8" aria-labelledby="projects-heading">

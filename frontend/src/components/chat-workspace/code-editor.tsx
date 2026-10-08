@@ -36,7 +36,7 @@ export function CodeEditor({
     <div className="flex h-full min-w-0 flex-col">
       <div className="flex h-10 shrink-0 items-center justify-between gap-2 border-b px-3">
         <span className="truncate font-mono text-xs">{file.path}</span>
-        <span className="shrink-0 text-xs text-muted-foreground">
+        <span className="shrink-0 rounded border bg-sidebar px-1.5 py-0.5 text-[10px] text-muted-foreground">
           Read only
         </span>
       </div>

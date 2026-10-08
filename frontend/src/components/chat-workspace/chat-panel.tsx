@@ -1,17 +1,17 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+
+import { createContext, useContext, useState, type ComponentType } from "react";
 import {
-  ArrowUp,
-  Check,
-  ChevronRight,
-  FileCode2,
-  LoaderCircle,
-  RotateCcw,
-  Sparkles,
-} from "lucide-react";
+  AssistantRuntimeProvider,
+  getExternalStoreMessages,
+  useAuiState,
+  useExternalStoreRuntime,
+} from "@assistant-ui/react";
+import { Check, FileCode2, LoaderCircle, RotateCcw, X } from "lucide-react";
+import { Thread } from "@/components/assistant-ui/elements/thread.aui";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { MessageResponse } from "@/components/ai-elements/message";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { convertMessage, getPromptText, getRetryPrompt } from "./assistant-runtime";
 import type { ChatMessage } from "./types";
 
 interface Props {
@@ -21,193 +21,100 @@ interface Props {
   onSendMessage: (text: string) => Promise<void>;
   onRetry: (text: string) => void;
   onSelectPath: (path: string) => void;
+  onShowPreview: () => void;
 }
-export function ChatPanel({
-  messages,
-  generating,
-  disabled,
-  onSendMessage,
-  onRetry,
-  onSelectPath,
-}: Props) {
-  const [input, setInput] = useState("");
-  const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "instant", block: "nearest" });
-  }, [messages]);
-  async function submit(event: React.FormEvent) {
-    event.preventDefault();
-    if (!input.trim() || disabled || generating) return;
-    const prompt = input.trim();
-    setInput("");
-    await onSendMessage(prompt);
-  }
+
+const BuildContext = createContext<Props | null>(null);
+
+function BuildMessageExtras() {
+  const context = useContext(BuildContext);
+  const message = useAuiState((s) => getExternalStoreMessages<ChatMessage>(s.message)[0]);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  if (!context || !message) return null;
+  const { messages, generating, disabled, onRetry, onSelectPath, onShowPreview } = context;
+  const streaming = message.status === "streaming";
+  const failed = message.status === "error";
+  const paths = [...new Set(message.changes.map((change) => change.path))];
+  if (!streaming && !failed && !paths.length && !message.activity?.length) return null;
+
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="flex h-11 shrink-0 items-center gap-2 border-b px-4 text-xs font-medium text-muted-foreground">
-        <Sparkles className="size-3.5" />
-        Build conversation
-      </div>
-      <div
-        className="min-h-0 flex-1 overflow-y-auto px-4 py-5"
-        role="log"
-        aria-label="Build conversation"
-        aria-live="polite"
-      >
-        {messages.length === 0 ? (
-          <div className="py-12">
-            <span className="mb-4 flex size-9 items-center justify-center rounded-xl bg-muted">
-              <Sparkles className="size-4" />
-            </span>
-            <h2 className="text-sm font-semibold">What should we build?</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              Describe your app, or ask for a change to the current project.
-            </p>
-          </div>
-        ) : (
-          messages.map((message, index) => (
-            <article key={message.id} className="mb-6 min-w-0">
-              <div className="mb-2 flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                {message.role === "user" ? (
-                  "You"
-                ) : (
-                  <>
-                    <Sparkles className="size-3" />
-                    Likeable
-                  </>
-                )}
-                {message.status === "error" && (
-                  <span className="text-destructive">· Needs attention</span>
-                )}
-              </div>
-              {message.role === "user" ? (
-                <p className="whitespace-pre-wrap rounded-xl bg-muted/70 px-3.5 py-3 text-sm leading-6">
-                  {message.content}
-                </p>
-              ) : (
-                <div className="space-y-3">
-                  {message.activity?.length ? (
-                    <details
-                      open={message.status === "streaming"}
-                      className="rounded-xl border px-3 py-2.5"
-                    >
-                      <summary className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
-                        <ChevronRight className="size-3" />
-                        {message.status === "streaming"
-                          ? "Build activity"
-                          : "View build activity"}
-                      </summary>
-                      <ol className="mt-3 space-y-2.5">
-                        {message.activity.map((activity) => (
-                          <li
-                            key={activity.id}
-                            className="flex items-start gap-2 text-xs leading-5 text-muted-foreground"
-                          >
-                            {activity.status === "active" ? (
-                              <LoaderCircle className="mt-0.5 size-3.5 shrink-0 animate-spin" />
-                            ) : (
-                              <Check className="mt-0.5 size-3.5 shrink-0" />
-                            )}
-                            <span className="break-all">{activity.label}</span>
-                          </li>
-                        ))}
-                      </ol>
-                    </details>
-                  ) : message.status === "streaming" ? (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <LoaderCircle className="size-4 animate-spin" />
-                      Working on your request…
-                    </div>
-                  ) : null}
-                  {message.content && (
-                    <div
-                      className={
-                        message.status === "error"
-                          ? "text-sm text-destructive"
-                          : "text-sm leading-6"
-                      }
-                    >
-                      <MessageResponse>{message.content}</MessageResponse>
-                    </div>
-                  )}
-                  {message.changes.length > 0 && (
-                    <div className="space-y-1">
-                      {[
-                        ...new Set(
-                          message.changes.map((change) => change.path),
-                        ),
-                      ].map((path) => (
-                        <button
-                          key={path}
-                          onClick={() => onSelectPath(path)}
-                          className="flex w-full items-center gap-2 rounded-lg border px-2.5 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring"
-                        >
-                          <FileCode2 className="size-3.5 shrink-0 text-muted-foreground" />
-                          <span className="truncate font-mono">{path}</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                  {message.status === "error" && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={generating || disabled}
-                      onClick={() =>
-                        onRetry(
-                          messages
-                            .slice(0, index)
-                            .findLast((item) => item.role === "user")
-                            ?.content ||
-                            "Fix the build errors in this project.",
-                        )
-                      }
-                    >
-                      <RotateCcw className="size-3" />
-                      Retry request
-                    </Button>
-                  )}
-                </div>
-              )}
-            </article>
-          ))
-        )}
-        <div ref={endRef} />
-      </div>
-      <form onSubmit={submit} className="shrink-0 border-t p-3">
-        <div className="overflow-hidden rounded-xl border bg-card focus-within:ring-2 focus-within:ring-ring/30">
-          <label className="sr-only" htmlFor="chat-prompt">
-            Describe a change
-          </label>
-          <Textarea
-            id="chat-prompt"
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="Describe an app or ask for a change…"
-            disabled={disabled || generating}
-            className="min-h-24 resize-none border-0 bg-transparent p-3 text-sm shadow-none focus-visible:ring-0"
-          />
-          <div className="flex items-center justify-between px-3 pb-2">
-            <span className="text-[11px] text-muted-foreground">
-              {generating
-                ? "Building your changes…"
-                : "Make it yours, one change at a time."}
-            </span>
-            <Button
-              type="submit"
-              size="icon-sm"
-              aria-label="Send message"
-              disabled={!input.trim() || generating || disabled}
-            >
-              {generating ? (
-                <LoaderCircle className="size-4 animate-spin" />
-              ) : (
-                <ArrowUp className="size-4" />
-              )}
-            </Button>
-          </div>
+    <div className="mb-4 space-y-3">
+      <Collapsible open={detailsOpen || streaming} onOpenChange={setDetailsOpen} className="overflow-hidden rounded-2xl border bg-background/70">
+        <div className="flex min-h-12 items-center gap-3 border-b px-4 py-3">
+          <span className="min-w-0 flex-1 text-xs font-semibold">
+            {streaming ? "Building your changes…" : failed ? "Build needs attention" : paths.length ? `Updated ${paths.length} ${paths.length === 1 ? "file" : "files"}` : "Build complete"}
+          </span>
+          {streaming ? <LoaderCircle aria-hidden className="size-3.5 shrink-0 animate-spin text-muted-foreground" /> : failed ? <X aria-hidden className="size-3.5 shrink-0 text-destructive" /> : <Check aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />}
         </div>
-      </form>
+        <div className="grid grid-cols-2 gap-2 p-2">
+          <CollapsibleTrigger asChild><Button variant="outline" size="sm" className="h-8 rounded-full text-xs">Details</Button></CollapsibleTrigger>
+          <Button variant="secondary" size="sm" className="h-8 rounded-full border text-xs" onClick={onShowPreview}>Preview</Button>
+        </div>
+        <CollapsibleContent>
+          <div className="space-y-4 border-t px-4 py-3">
+            {!!message.activity?.length && (
+              <div>
+                <p className="mb-2 text-xs font-medium text-muted-foreground">Build activity</p>
+                <ol className="space-y-2">
+                  {message.activity.map((activity) => (
+                    <li key={activity.id} className="flex items-start gap-2 text-xs leading-5 text-muted-foreground">
+                      {activity.status === "active" ? <LoaderCircle aria-hidden className="mt-0.5 size-3.5 shrink-0 animate-spin" /> : activity.status === "error" ? <X aria-hidden className="mt-0.5 size-3.5 shrink-0 text-destructive" /> : <Check aria-hidden className="mt-0.5 size-3.5 shrink-0" />}
+                      <span className="break-words [overflow-wrap:anywhere]">{activity.label}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+            {paths.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground">Changed files</p>
+                <div className="flex flex-col gap-1">
+                  {paths.map((path) => <Button key={path} variant="ghost" size="sm" className="h-auto min-h-8 max-w-full justify-start px-0 py-1.5 text-xs" onClick={() => onSelectPath(path)}><FileCode2 aria-hidden className="size-3.5 shrink-0 text-muted-foreground" /><span className="min-w-0 break-all text-left font-mono">{path}</span></Button>)}
+                </div>
+              </div>
+            )}
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+      {failed && <Button variant="outline" size="sm" disabled={generating || disabled} onClick={() => onRetry(getRetryPrompt(messages, message.id))}><RotateCcw aria-hidden className="size-3" />Retry request</Button>}
     </div>
+  );
+}
+
+function BuildWelcome() {
+  return (
+    <div className="mb-6 px-2">
+      <h2 className="text-2xl font-medium tracking-tight">What should we build?</h2>
+      <p className="mt-2 text-sm leading-6 text-muted-foreground">Describe your app, or ask for a change to this project.</p>
+    </div>
+  );
+}
+
+const threadComponents: { AssistantMessageExtras: ComponentType; Welcome: ComponentType } = {
+  AssistantMessageExtras: BuildMessageExtras,
+  Welcome: BuildWelcome,
+};
+
+export function ChatPanel(props: Props) {
+  const { messages, generating, disabled, onSendMessage } = props;
+  const runtime = useExternalStoreRuntime({
+    messages,
+    convertMessage,
+    isRunning: generating,
+    isDisabled: disabled,
+    onNew: async (message) => {
+      const prompt = getPromptText(message.content);
+      if (prompt) await onSendMessage(prompt);
+    },
+  });
+
+  return (
+    <AssistantRuntimeProvider runtime={runtime}>
+      <BuildContext.Provider value={props}>
+        <div className="h-full min-h-0 text-sm" role="region" aria-label="Build conversation">
+          <Thread components={threadComponents} autoFocus={false} />
+        </div>
+      </BuildContext.Provider>
+    </AssistantRuntimeProvider>
   );
 }

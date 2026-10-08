@@ -16,7 +16,7 @@ export function FileExplorer({
     return items.map((item) =>
       item.isFolder ? (
         <details key={item.path} open className="group/folder">
-          <summary className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted">
+          <summary className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-xs text-muted-foreground hover:bg-muted">
             <ChevronRight className="size-3 group-open/folder:rotate-90" />
             <Folder className="size-3.5" />
             {item.name}
@@ -31,8 +31,9 @@ export function FileExplorer({
           aria-current={selectedFile?.path === item.path ? "true" : undefined}
           onClick={() => onSelectFile(item)}
           className={cn(
-            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring",
-            selectedFile?.path === item.path && "bg-secondary font-medium",
+            "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-xs hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring",
+            selectedFile?.path === item.path &&
+              "bg-background font-medium shadow-xs ring-1 ring-border",
           )}
         >
           <FileCode2 className="size-3.5 shrink-0 text-muted-foreground" />
