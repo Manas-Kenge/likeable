@@ -1,218 +1,138 @@
 "use client";
-
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  CodeIcon,
-  GlobeIcon,
-  ArrowLeftIcon,
-  ArrowRightIcon,
-  ExternalLinkIcon,
-  Maximize2Icon,
-  MousePointerClickIcon,
-  RefreshCcwIcon,
+  FileCode2,
+  Globe,
+  LoaderCircle,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  WebPreview,
-  WebPreviewNavigation,
-  WebPreviewNavigationButton,
-  WebPreviewUrl,
-  WebPreviewBody,
-  WebPreviewConsole,
-} from "@/components/ai-elements/web-preview";
-import { MorphingText } from "@/components/ui/morphing-text";
 import { cn } from "@/lib/utils";
-import { FileExplorer } from "./file-explorer";
 import { CodeEditor } from "./code-editor";
+import { FileExplorer } from "./file-explorer";
 import type { FileNode, PreviewTab } from "./types";
 
-interface PreviewPanelProps {
+interface Props {
   files: FileNode[];
   selectedFile: FileNode | null;
   previewUrl: string | null;
   activeTab: PreviewTab;
-  isLoading?: boolean;
-  previewReloadTrigger?: number;
-  onTabChange: (tab: PreviewTab) => void;
+  generating: boolean;
+  previewReloadTrigger: number;
+  mobilePreview: boolean;
   onSelectFile: (file: FileNode) => void;
-  className?: string;
+  fileLoading: boolean;
+  fileError: string | null;
 }
-
-const loadingTexts = [
-  "Building your app...",
-  "Writing code...",
-  "Creating components...",
-  "Almost there...",
-];
-
 export function PreviewPanel({
   files,
   selectedFile,
   previewUrl,
   activeTab,
-  isLoading = false,
-  previewReloadTrigger = 0,
-  onTabChange,
+  generating,
+  previewReloadTrigger,
+  mobilePreview,
   onSelectFile,
-  className,
-}: PreviewPanelProps) {
-  const [fullscreen, setFullscreen] = useState(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-
-  const handleReload = useCallback(() => {
-    if (iframeRef.current && iframeRef.current.src) {
-      try {
-        const src = iframeRef.current.src;
-        const url = new URL(src);
-        url.searchParams.set('_t', Date.now().toString());
-        url.searchParams.set('_cache', Math.random().toString());
-        url.searchParams.set('_reload', 'true');
-        iframeRef.current.src = url.toString();
-      } catch (error) {
-        console.error("[PreviewPanel] Failed to reload iframe:", error);
-      }
-    }
-  }, []);
-
-  // Watch for reload trigger from parent
+  fileLoading,
+  fileError,
+}: Props) {
+  const iframe = useRef<HTMLIFrameElement>(null);
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const src = previewUrl
+    ? `${previewUrl}?reload=${previewReloadTrigger}`
+    : undefined;
+  const loadFailed = failedUrl === src;
   useEffect(() => {
-    if (previewReloadTrigger > 0) {
-      handleReload();
-    }
-  }, [previewReloadTrigger, handleReload]);
-
-  const handleOpenExternal = useCallback(() => {
-    if (previewUrl) {
-      window.open(previewUrl, "_blank");
-    }
-  }, [previewUrl]);
-
-  const handleFullscreen = useCallback(() => {
-    setFullscreen((prev) => !prev);
-  }, []);
-
+    if (!src || loadedUrl === src) return;
+    const timer = setTimeout(() => setFailedUrl(src), 20000);
+    return () => clearTimeout(timer);
+  }, [src, loadedUrl]);
   return (
-    <div
-      className={cn(
-        "flex h-full flex-col",
-        fullscreen && "fixed inset-0 z-50 bg-background",
-        className
-      )}
-    >
-      {/* Tab header */}
-      <div className="flex h-14 items-center justify-between border-b px-2">
-        <div className="flex gap-1">
-          <Button
-            variant={activeTab === "code" ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => onTabChange("code")}
-            className="gap-2"
-          >
-            <CodeIcon className="h-4 w-4" />
-            Code
-          </Button>
-          <Button
-            variant={activeTab === "preview" ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => onTabChange("preview")}
-            className="gap-2"
-          >
-            <GlobeIcon className="h-4 w-4" />
-            Preview
-          </Button>
+    <div className="flex h-full min-w-0 flex-col">
+      <div
+        className={cn(
+          "min-h-0 flex-1 flex-col",
+          activeTab === "preview" ? "flex" : "hidden",
+        )}
+      >
+        <div className={cn("relative flex min-h-0 flex-1 justify-center overflow-auto bg-background", mobilePreview && "bg-muted/40 p-3")}>
+          {previewUrl ? (
+            <>
+              <iframe
+                ref={iframe}
+                src={src}
+                title="Generated app preview"
+                sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
+                className={cn(
+                  "h-full min-h-64 w-full border-0 bg-background",
+                  mobilePreview && "max-w-[390px] rounded-xl border shadow-sm",
+                )}
+                onLoad={() => {
+                  setLoadedUrl(src || null);
+                  setFailedUrl(null);
+                }}
+              />
+              {loadedUrl !== src && !loadFailed && (
+                <div
+                  role="status"
+                  className="absolute right-5 top-5 flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-xs shadow-sm"
+                >
+                  <LoaderCircle className="size-3 animate-spin" />
+                  Loading preview…
+                </div>
+              )}
+              {loadFailed && (
+                <div
+                  role="alert"
+                  className="absolute inset-x-5 top-5 rounded-xl border bg-background p-4 text-sm shadow-sm"
+                >
+                  The preview is taking longer than expected. Reload it, or
+                  reopen the project if its session expired.
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="flex flex-col items-center justify-center gap-3 text-center text-muted-foreground">
+              <span className="flex size-12 items-center justify-center rounded-2xl border bg-background">
+                <Globe className="size-5" />
+              </span>
+              <h2 className="text-sm font-medium text-foreground">
+                Your app, right here
+              </h2>
+              <p className="max-w-xs text-sm leading-6">
+                {generating
+                  ? "Your app is being prepared. Follow the progress in the conversation."
+                  : "Reopen the project to start its preview."}
+              </p>
+            </div>
+          )}
         </div>
       </div>
-
-      {/* Tab content */}
-      <div className="flex-1 overflow-hidden">
-        {activeTab === "code" ? (
-          <div className="flex h-full">
-            {/* File explorer sidebar */}
-            <div className="w-64" style={{ borderRight: '1px solid #3e3d32' }}>
-              <FileExplorer
-                files={files}
-                selectedFile={selectedFile}
-                onSelectFile={onSelectFile}
-              />
-            </div>
-
-            {/* Code editor */}
-            <div className="flex-1">
-              <CodeEditor file={selectedFile} />
-            </div>
-          </div>
-        ) : (
-          <WebPreview
-            defaultUrl={previewUrl || ""}
-            className="h-full"
-          >
-            <WebPreviewNavigation>
-              <WebPreviewNavigationButton
-                onClick={() => {
-                  // Browser history navigation not available in sandboxed iframe
-                }}
-                tooltip="Go back"
-                disabled={!previewUrl}
-              >
-                <ArrowLeftIcon className="size-4" />
-              </WebPreviewNavigationButton>
-              <WebPreviewNavigationButton
-                onClick={() => {
-                  // Browser history navigation not available in sandboxed iframe
-                }}
-                tooltip="Go forward"
-                disabled={!previewUrl}
-              >
-                <ArrowRightIcon className="size-4" />
-              </WebPreviewNavigationButton>
-              <WebPreviewNavigationButton
-                onClick={handleReload}
-                tooltip="Reload"
-                disabled={!previewUrl}
-              >
-                <RefreshCcwIcon className="size-4" />
-              </WebPreviewNavigationButton>
-              <WebPreviewUrl
-                readOnly
-                placeholder="Preview will appear here..."
-                value={previewUrl || ""}
-              />
-              <WebPreviewNavigationButton
-                onClick={() => {}}
-                tooltip="Select element"
-                disabled={!previewUrl}
-              >
-                <MousePointerClickIcon className="size-4" />
-              </WebPreviewNavigationButton>
-              <WebPreviewNavigationButton
-                onClick={handleOpenExternal}
-                tooltip="Open in new tab"
-                disabled={!previewUrl}
-              >
-                <ExternalLinkIcon className="size-4" />
-              </WebPreviewNavigationButton>
-              <WebPreviewNavigationButton
-                onClick={handleFullscreen}
-                tooltip={fullscreen ? "Exit fullscreen" : "Fullscreen"}
-              >
-                <Maximize2Icon className="size-4" />
-              </WebPreviewNavigationButton>
-            </WebPreviewNavigation>
-
-            {isLoading ? (
-              <div className="flex-1 flex items-center justify-center bg-background">
-                <MorphingText texts={loadingTexts} className="text-muted-foreground" />
-              </div>
-            ) : (
-              <WebPreviewBody
-                src={previewUrl || undefined}
-                ref={iframeRef}
-              />
-            )}
-
-            <WebPreviewConsole logs={[]} />
-          </WebPreview>
+      <div
+        className={cn(
+          "min-h-0 flex-1 flex-col sm:flex-row",
+          activeTab === "code" ? "flex" : "hidden",
         )}
+      >
+        <aside className="h-36 w-full shrink-0 border-b bg-sidebar/50 sm:h-auto sm:w-48 sm:border-r sm:border-b-0">
+          <div className="flex h-10 items-center gap-2 border-b px-3 text-xs font-medium text-muted-foreground">
+            <FileCode2 className="size-3.5" />
+            Project files
+          </div>
+          <div className="h-[calc(100%-2.5rem)]">
+            <FileExplorer
+              files={files}
+              selectedFile={selectedFile}
+              onSelectFile={onSelectFile}
+            />
+          </div>
+        </aside>
+        <div className="min-w-0 flex-1">
+          <CodeEditor
+            file={selectedFile}
+            loading={fileLoading}
+            error={fileError}
+          />
+        </div>
       </div>
     </div>
   );

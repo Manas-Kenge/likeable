@@ -1,446 +1,293 @@
 import { Sandbox } from "e2b";
-import { v4 as uuidv4 } from "uuid";
+import { zipSync } from "fflate";
 import type { ModelMessage } from "ai";
-import type { Project, CreateProjectRequest } from "./types";
+import type {
+  CreateProjectRequest,
+  FileChange,
+  GenerationRun,
+  Project,
+  StreamEvent,
+} from "../../shared/types";
+import { HttpError, ProjectStore } from "./store";
+import { runSandboxCommand } from "./commands";
+import { BASE_PATH, projectPath, shellQuote } from "./paths";
+import {
+  captureFiles,
+  listSourceFiles,
+  safeSandboxPath,
+  waitForPreview,
+} from "./sandbox-files";
 
-// In-memory storage (replace with database in production)
-const projects: Map<string, Project> = new Map();
-const sandboxes: Map<string, Sandbox> = new Map();
-
-// E2B template ID - must be set in environment
-const E2B_TEMPLATE_ID = process.env.E2B_TEMPLATE_ID || "lovable-clone-dev";
-
-/**
- * Retry configuration for transient errors
- */
-const RETRY_CONFIG = {
-  maxAttempts: 3,
-  initialDelay: 1000, // 1 second
-  backoffMultiplier: 2,
-  maxDelay: 10000, // 10 seconds
-};
-
-/**
- * Retry helper for transient errors (network issues, timeouts)
- */
-async function retryWithBackoff<T>(
-  fn: () => Promise<T>,
-  operation: string,
-  attempts = RETRY_CONFIG.maxAttempts
-): Promise<T> {
-  let lastError: Error | undefined;
-
-  for (let attempt = 1; attempt <= attempts; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error as Error;
-
-      // Don't retry on non-transient errors
-      if (isNonRetryableError(error)) {
-        throw error;
-      }
-
-      if (attempt < attempts) {
-        const delay = Math.min(
-          RETRY_CONFIG.initialDelay *
-            Math.pow(RETRY_CONFIG.backoffMultiplier, attempt - 1),
-          RETRY_CONFIG.maxDelay
-        );
-        console.log(
-          `[Retry ${attempt}/${attempts}] ${operation} failed, retrying in ${delay}ms...`,
-          error
-        );
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  console.error(
-    `[Retry Failed] ${operation} failed after ${attempts} attempts`
-  );
-  throw lastError;
+export interface SandboxProvider {
+  create(): Promise<Sandbox>;
+  connect(id: string): Promise<Sandbox>;
 }
-
-/**
- * Determine if an error is non-retryable (user-fixable or permanent)
- */
-function isNonRetryableError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-
-  const errorMessage = (error as Error).message?.toLowerCase() || "";
-  const errorName = (error as Error).name?.toLowerCase() || "";
-
-  // Authentication errors (user-fixable)
-  if (
-    errorName.includes("auth") ||
-    errorMessage.includes("authentication") ||
-    errorMessage.includes("unauthorized")
-  ) {
-    return true;
-  }
-
-  // Validation errors (user-fixable)
-  if (errorName.includes("validation") || errorMessage.includes("invalid")) {
-    return true;
-  }
-
-  // Not found errors (permanent)
-  if (
-    errorMessage.includes("not found") ||
-    errorMessage.includes("does not exist")
-  ) {
-    return true;
-  }
-
-  return false;
+export interface RunSession {
+  run: GenerationRun;
+  sandbox: Sandbox;
+  history: ModelMessage[];
 }
-
-/**
- * Create a new project with E2B sandbox (with retry for transient errors)
- */
-export async function createProject(
-  request: CreateProjectRequest
-): Promise<Project> {
-  const projectId = uuidv4();
-  console.log(`\n========== CREATING PROJECT ==========`);
-  console.log(`Project ID: ${projectId}`);
-  console.log(`Project Name: ${request.name}`);
-  console.log(`Has Initial Prompt: ${!!request.initialPrompt}`);
-  console.log(`E2B_TEMPLATE_ID: ${E2B_TEMPLATE_ID}`);
-
-  // Create project record
-  const project: Project = {
-    id: projectId,
-    name: request.name,
-    description: request.description,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-    status: "creating",
-    files: [],
-    messages: [],
-  };
-
-  projects.set(projectId, project);
-  console.log(`[${projectId}] Project record created`);
-
-  try {
-    console.log(
-      `[${projectId}] Creating sandbox from template: ${E2B_TEMPLATE_ID}`
-    );
-    const startTime = Date.now();
-
-    // Use retry for sandbox creation (transient errors)
-    const sandbox = await retryWithBackoff(
-      () =>
-        Sandbox.create(E2B_TEMPLATE_ID, {
-          timeoutMs: 15 * 60 * 1000, // 15 minute lifecycle
-        }),
-      `Create sandbox for project ${projectId}`
-    );
-
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(
-      `[${projectId}] ✅ Sandbox created in ${elapsed}s (ID: ${sandbox.sandboxId})`
-    );
-
-    // Store sandbox reference
-    sandboxes.set(projectId, sandbox);
-
-    // Get the preview URL - E2B SDK handles this automatically
-    const previewUrl = sandbox.getHost(5173);
-    console.log(`[${projectId}] Preview URL: https://${previewUrl}`);
-
-    // Start dev server with HMR host configured for E2B proxy
-    console.log(`[${projectId}] Starting dev server with HMR host: ${previewUrl}`);
-    await sandbox.commands.run(
-      `cd /home/user/app && VITE_DEV_SERVER_HMR_HOST=${previewUrl} npm run dev > /tmp/vite.log 2>&1 &`,
-      { background: true }
-    );
-    // Give the dev server a moment to start
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-
-    // Update project with sandbox info
-    project.sandboxId = sandbox.sandboxId;
-    project.previewUrl = `https://${previewUrl}`;
-    project.status = "running";
-    project.updatedAt = new Date().toISOString();
-
-    // Get initial file list with retry
-    console.log(`[${projectId}] Fetching initial file list...`);
-    const files = await retryWithBackoff(
-      () => listSandboxFiles(sandbox),
-      `List files for project ${projectId}`
-    );
-    console.log(`[${projectId}] Found ${files.length} files`);
-    project.files = files;
-
-    projects.set(projectId, project);
-    console.log(`[${projectId}] ✅ PROJECT READY`);
-    console.log(`========== PROJECT CREATION COMPLETE ==========\n`);
-
-    return project;
-  } catch (error) {
-    console.error(`[${projectId}] ❌ FAILED to create project:`, error);
-    project.status = "error";
-    project.updatedAt = new Date().toISOString();
-    projects.set(projectId, project);
-    console.log(`========== PROJECT CREATION FAILED ==========\n`);
-    throw error;
-  }
-}
-
-/**
- * Get a project by ID (with error handling)
- */
-export async function getProject(projectId: string): Promise<Project | null> {
-  console.log(`[${projectId}] getProject called`);
-  const project = projects.get(projectId);
-  if (!project) {
-    console.log(`[${projectId}] Project not found`);
-    return null;
-  }
-  console.log(`[${projectId}] Project found - status: ${project.status}`);
-
-  // Refresh file list if sandbox is running
-  const sandbox = sandboxes.get(projectId);
-  if (sandbox && project.status === "running") {
-    try {
-      console.log(`[${projectId}] Refreshing file list...`);
-      // Use retry for file listing (transient errors)
-      const files = await retryWithBackoff(
-        () => listSandboxFiles(sandbox),
-        `Refresh files for project ${projectId}`,
-        2 // Fewer retries for refresh
-      );
-      console.log(`[${projectId}] Refreshed: ${files.length} files`);
-      project.files = files;
-      project.updatedAt = new Date().toISOString();
-      projects.set(projectId, project);
-    } catch (error) {
-      // Sandbox might have timed out (LLM-recoverable by recreating)
-      console.error(
-        `[${projectId}] ⚠️ Sandbox error, marking as stopped:`,
-        error
-      );
-      project.status = "stopped";
-      projects.set(projectId, project);
-    }
-  }
-
-  return project;
-}
-
-/**
- * Get all projects
- */
-export function getAllProjects(): Project[] {
-  return Array.from(projects.values()).sort(
-    (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-  );
-}
-
-/**
- * Get sandbox for a project
- */
-export function getSandbox(projectId: string): Sandbox | undefined {
-  return sandboxes.get(projectId);
-}
-
-/**
- * Add a user+assistant turn to project history.
- * Enforces rolling 10-turn (20-entry) window.
- */
-export function addMessage(
+export type ChatEngine = (
+  message: string,
   projectId: string,
-  userContent: string,
-  assistantContent: string
-): void {
-  const project = projects.get(projectId);
-  if (!project) return;
-
-  project.messages.push({ role: "user", content: userContent });
-  project.messages.push({ role: "assistant", content: assistantContent });
-
-  if (project.messages.length > 20) {
-    project.messages = project.messages.slice(-20);
+  sandbox: Sandbox,
+  history: ModelMessage[],
+  onWrite: (path: string, content: string) => Promise<void>,
+) => AsyncGenerator<StreamEvent>;
+export class ProjectService {
+  private sandboxes = new Map<string, Sandbox>();
+  private provisioning = new Map<string, Promise<Project>>();
+  private exporting = new Set<string>();
+  constructor(
+    public store: ProjectStore,
+    private provider: SandboxProvider,
+    private engine: ChatEngine,
+  ) {}
+  async createProject(request: CreateProjectRequest) {
+    const project = this.store.create(request);
+    return this.resumeProject(project.id);
   }
-
-  project.updatedAt = new Date().toISOString();
-  projects.set(projectId, project);
-}
-
-/**
- * Get conversation history for a project (for passing to the LLM).
- */
-export function getHistory(projectId: string): ModelMessage[] {
-  const project = projects.get(projectId);
-  if (!project) return [];
-  return project.messages;
-}
-
-/**
- * List files in sandbox directory using E2B SDK built-in functionality
- * Simplified to use SDK's files.list() method instead of custom find command
- */
-async function listSandboxFiles(sandbox: Sandbox): Promise<string[]> {
-  const BASE_PATH = "/home/user/app";
-  console.log(`  listSandboxFiles: Searching in ${BASE_PATH}`);
-
-  try {
-    // Use E2B SDK's built-in files.list() method recursively
-    const allFiles: string[] = [];
-
-    async function listRecursive(path: string, depth = 0): Promise<void> {
-      // Limit recursion depth to avoid excessive scanning
-      if (depth > 10) return;
-
-      const items = await sandbox.files.list(path);
-
-      for (const item of items) {
-        const fullPath = `${path}/${item.name}`;
-        const relativePath = fullPath.replace(`${BASE_PATH}/`, "");
-
-        // Skip node_modules and .git directories
-        if (
-          relativePath.includes("node_modules") ||
-          relativePath.includes(".git")
-        ) {
-          continue;
-        }
-
-        if (item.type === "dir") {
-          // Recursively list subdirectories
-          await listRecursive(fullPath, depth + 1);
-        } else if (item.type === "file") {
-          // Filter for relevant file extensions
-          const ext = item.name.split(".").pop()?.toLowerCase();
-          const relevantExtensions = [
-            "tsx",
-            "ts",
-            "js",
-            "jsx",
-            "mjs",
-            "css",
-            "json",
-            "html",
-            "md",
-            "toml",
-            "yaml",
-            "yml",
-          ];
-
-          if (ext && relevantExtensions.includes(ext)) {
-            allFiles.push(relativePath);
-          }
-        }
+  async getProject(id: string): Promise<Project> {
+    let project = this.store.get(id);
+    if (!project) throw new HttpError(404, "Project not found");
+    if (this.provisioning.has(id)) return project;
+    if (project.sandboxId) {
+      const checkedSandboxId = project.sandboxId;
+      try {
+        const sandbox =
+          this.sandboxes.get(id) ||
+          (await this.provider.connect(project.sandboxId));
+        if (!(await sandbox.isRunning())) throw new Error("Sandbox expired");
+        project = this.store.get(id)!;
+        if (project.sandboxId !== checkedSandboxId) return project;
+        this.sandboxes.set(id, sandbox);
+        project.status = "running";
+        project.previewUrl = `https://${sandbox.getHost(5173)}`;
+      } catch {
+        project = this.store.get(id)!;
+        if (project.sandboxId !== checkedSandboxId) return project;
+        project.status = "stopped";
+        project.previewUrl = undefined;
+        this.sandboxes.delete(id);
       }
+      this.store.save(project);
     }
-
-    await listRecursive(BASE_PATH);
-    console.log(`  listSandboxFiles: Found ${allFiles.length} files`);
-    return allFiles.slice(0, 100); // Limit to 100 files
-  } catch (error) {
-    console.error("  listSandboxFiles: Failed to list files:", error);
-    // Fallback: return empty array instead of throwing
-    return [];
+    return project;
   }
-}
-
-/**
- * Stop and cleanup a project sandbox
- * Uses E2B SDK's built-in kill() method
- */
-export async function stopProject(projectId: string): Promise<void> {
-  console.log(`[${projectId}] Stopping project...`);
-  const sandbox = sandboxes.get(projectId);
-
-  if (sandbox) {
+  async resumeProject(id: string): Promise<Project> {
+    const existing = this.provisioning.get(id);
+    if (existing) return existing;
+    const task = this.provision(id);
+    this.provisioning.set(id, task);
     try {
-      // E2B SDK provides built-in kill() method
-      await sandbox.kill();
-      console.log(`[${projectId}] Sandbox killed successfully`);
+      return await task;
+    } finally {
+      this.provisioning.delete(id);
+    }
+  }
+  private async provision(id: string): Promise<Project> {
+    const project = await this.getProject(id);
+    if (this.exporting.has(id))
+      throw new HttpError(
+        409,
+        "Wait for the export to finish before reopening",
+      );
+    if (project.generationStatus === "running")
+      throw new HttpError(409, "A generation is already running");
+    if (project.status === "running" && this.sandboxes.has(id)) return project;
+    project.status = "creating";
+    this.store.save(project);
+    let sandbox: Sandbox | undefined;
+    try {
+      sandbox = await this.provider.create();
+      const saved = this.store.getSnapshot(id);
+      if (saved.length) {
+        const paths = new Set(saved.map((file) => file.path));
+        for (const path of await listSourceFiles(sandbox))
+          if (!paths.has(path))
+            await sandbox.files.remove(await safeSandboxPath(sandbox, path));
+        for (const file of saved) {
+          await safeSandboxPath(sandbox, file.path);
+          await sandbox.files.write(
+            projectPath(file.path),
+            new Blob([new Uint8Array(file.content)]),
+          );
+        }
+        const install = await runSandboxCommand(
+          sandbox,
+          `cd ${shellQuote(BASE_PATH)} && npm install --no-audit --no-fund`,
+          120000,
+        );
+        if (install.exitCode !== 0)
+          throw new Error(
+            `Dependencies could not be restored: ${install.stderr.slice(-4000)}`,
+          );
+      }
+      const host = sandbox.getHost(5173);
+      await sandbox.commands.run(
+        `cd ${shellQuote(BASE_PATH)} && VITE_DEV_SERVER_HMR_HOST=${shellQuote(host)} npm run dev > /tmp/vite.log 2>&1`,
+        { background: true },
+      );
+      await waitForPreview(sandbox);
+      this.store.saveSnapshot(id, await captureFiles(sandbox));
+      const ready = this.store.get(id)!;
+      ready.sandboxId = sandbox.sandboxId;
+      ready.previewUrl = `https://${host}`;
+      ready.status = "running";
+      ready.updatedAt = new Date().toISOString();
+      this.store.save(ready);
+      this.sandboxes.set(id, sandbox);
+      return ready;
     } catch (error) {
-      // Don't throw - just log, as sandbox may already be stopped
-      console.warn(
-        `[${projectId}] Error killing sandbox (may already be stopped):`,
-        error
+      if (sandbox) await sandbox.kill().catch(() => {});
+      const failed = this.store.get(id)!;
+      failed.status = "error";
+      failed.sandboxId = undefined;
+      failed.previewUrl = undefined;
+      this.store.save(failed);
+      throw error;
+    }
+  }
+  async startRun(
+    id: string,
+    message: string,
+    initial = false,
+  ): Promise<RunSession> {
+    const project = await this.getProject(id);
+    if (this.provisioning.has(id))
+      throw new HttpError(409, "Project is being reopened");
+    if (this.exporting.has(id))
+      throw new HttpError(
+        409,
+        "Wait for the export to finish before generating",
+      );
+    const sandbox = this.sandboxes.get(id);
+    if (project.status !== "running" || !sandbox)
+      throw new HttpError(409, "Reopen the project before sending a message");
+    if (
+      initial &&
+      (!project.initialPrompt || message !== project.initialPrompt)
+    )
+      throw new HttpError(400, "Initial prompt does not match this project");
+    const history: ModelMessage[] = project.messages
+      .slice(-20)
+      .map((item) => ({ role: item.role, content: item.content }));
+    const run = this.store.beginRun(id, message, initial);
+    return { run, sandbox, history };
+  }
+  async *executeRun(session: RunSession): AsyncGenerator<StreamEvent> {
+    const { run, sandbox, history } = session;
+    let changes: FileChange[] = [];
+    let finalText = "";
+    let failure: string | undefined;
+    let completed = false;
+    const checkpoint = async (path: string, content: string) =>
+      this.store.putFile(run.projectId, {
+        path,
+        content: new TextEncoder().encode(content),
+      });
+    try {
+      for await (const event of this.engine(
+        run.prompt,
+        run.projectId,
+        sandbox,
+        history,
+        checkpoint,
+      )) {
+        if (event.type === "file_complete") {
+          changes = [
+            ...changes.filter((change) => change.path !== event.data.path),
+            event.data,
+          ];
+          this.store.recordChanges(run.id, changes);
+        }
+        if (event.type === "done") {
+          finalText = event.data.text;
+          completed = true;
+        } else if (event.type === "error") {
+          failure = event.data.message;
+          break;
+        } else yield event;
+      }
+      if (!completed && !failure)
+        failure =
+          "Generation ended without a completed result. Retry your request.";
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+    }
+    try {
+      this.store.saveSnapshot(run.projectId, await captureFiles(sandbox));
+    } catch (error) {
+      failure = `${failure ? `${failure}\n\n` : ""}Some source changes could not be saved: ${error instanceof Error ? error.message : String(error)}`;
+    }
+    if (failure) {
+      this.store.finishRun(run.id, "failed", failure, changes);
+      yield { type: "error", data: { message: failure } };
+    } else {
+      this.store.finishRun(run.id, "completed", finalText, changes);
+      yield { type: "done", data: { text: finalText, runId: run.id } };
+    }
+  }
+  async readFile(id: string, path: string): Promise<string> {
+    try {
+      projectPath(path);
+    } catch (error) {
+      throw new HttpError(
+        400,
+        error instanceof Error ? error.message : "Invalid file path",
       );
     }
-    sandboxes.delete(projectId);
+    const project = await this.getProject(id);
+    const sandbox = this.sandboxes.get(id);
+    if (project.status === "running" && sandbox) {
+      let fullPath: string;
+      try {
+        fullPath = await safeSandboxPath(sandbox, path);
+      } catch (error) {
+        throw new HttpError(
+          400,
+          error instanceof Error ? error.message : "Invalid file path",
+        );
+      }
+      try {
+        return await sandbox.files.read(fullPath);
+      } catch {
+        throw new HttpError(404, "File not found");
+      }
+    }
+    const file = this.store.getSnapshot(id).find((item) => item.path === path);
+    if (!file) throw new HttpError(404, "File not found");
+    return new TextDecoder().decode(file.content);
   }
-
-  const project = projects.get(projectId);
-  if (project) {
-    project.status = "stopped";
-    project.updatedAt = new Date().toISOString();
-    projects.set(projectId, project);
-    console.log(`[${projectId}] Project marked as stopped`);
+  async exportProject(id: string): Promise<Uint8Array> {
+    const project = await this.getProject(id);
+    if (project.generationStatus === "running" || this.provisioning.has(id))
+      throw new HttpError(
+        409,
+        "Wait for the current operation before exporting",
+      );
+    if (this.exporting.has(id))
+      throw new HttpError(409, "An export is already running");
+    this.exporting.add(id);
+    try {
+      const sandbox = this.sandboxes.get(id);
+      if (project.status === "running" && sandbox)
+        this.store.saveSnapshot(id, await captureFiles(sandbox));
+      const files = this.store.getSnapshot(id);
+      if (!files.length)
+        throw new HttpError(409, "No source files have been saved yet");
+      return zipSync(
+        Object.fromEntries(files.map((file) => [file.path, file.content])),
+        { level: 6 },
+      );
+    } finally {
+      this.exporting.delete(id);
+    }
   }
 }
-
-/**
- * Restart a stopped project (with retry for transient errors)
- */
-export async function restartProject(
-  projectId: string
-): Promise<Project | null> {
-  console.log(`[${projectId}] Restarting project...`);
-  const project = projects.get(projectId);
-  if (!project) {
-    console.log(`[${projectId}] Project not found`);
-    return null;
-  }
-
-  // Stop existing sandbox if any
-  await stopProject(projectId);
-
-  // Create new sandbox
-  project.status = "creating";
-  projects.set(projectId, project);
-
-  try {
-    console.log(`[${projectId}] Creating new sandbox...`);
-
-    // Use retry for sandbox creation (transient errors)
-    const sandbox = await retryWithBackoff(
-      () =>
-        Sandbox.create(E2B_TEMPLATE_ID, {
-          timeoutMs: 10 * 60 * 1000,
-        }),
-      `Restart sandbox for project ${projectId}`
-    );
-
-    console.log(
-      `[${projectId}] ✅ Sandbox restarted (ID: ${sandbox.sandboxId})`
-    );
-
-    sandboxes.set(projectId, sandbox);
-
-    // E2B SDK handles host URL automatically
-    const previewUrl = sandbox.getHost(5173);
-    
-    // Start dev server with HMR host configured for E2B proxy
-    console.log(`[${projectId}] Starting dev server with HMR host: ${previewUrl}`);
-    await sandbox.commands.run(
-      `cd /home/user/app && VITE_DEV_SERVER_HMR_HOST=${previewUrl} npm run dev > /tmp/vite.log 2>&1 &`,
-      { background: true }
-    );
-    // Give the dev server a moment to start
-    await new Promise((resolve) => setTimeout(resolve, 2000));
-    
-    project.sandboxId = sandbox.sandboxId;
-    project.previewUrl = `https://${previewUrl}`;
-    project.status = "running";
-    project.updatedAt = new Date().toISOString();
-
-    projects.set(projectId, project);
-    console.log(`[${projectId}] Project restarted successfully`);
-    return project;
-  } catch (error) {
-    console.error(`[${projectId}] ❌ Failed to restart project:`, error);
-    project.status = "error";
-    projects.set(projectId, project);
-    throw error;
-  }
+export function e2bProvider(templateId: string): SandboxProvider {
+  return {
+    create: () => Sandbox.create(templateId, { timeoutMs: 15 * 60 * 1000 }),
+    connect: (id) => Sandbox.connect(id),
+  };
 }

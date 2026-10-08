@@ -1,196 +1,132 @@
-// Use Next.js API routes (proxies to backend)
-// This avoids CORS issues and keeps the backend URL private
-const API_BASE = "/api";
+import type {
+  ApiResponse,
+  CreateProjectRequest,
+  Project,
+  StreamEvent,
+} from "../../../shared/types";
+export type {
+  ApiResponse,
+  CreateProjectRequest,
+  Project,
+  StreamEvent,
+} from "../../../shared/types";
 
-/**
- * API client for communicating with the Lovable backend via Next.js proxy
- */
-
-export interface Project {
-  id: string;
-  name: string;
-  description?: string;
-  createdAt: string;
-  updatedAt: string;
-  sandboxId?: string;
-  previewUrl?: string;
-  status: "creating" | "running" | "stopped" | "error";
-  files: string[];
-  context: Record<string, unknown>;
-  messages: ChatMessage[];
-}
-
-export interface ChatMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: string;
-  status?: "pending" | "streaming" | "complete" | "error";
-  changes?: FileChange[];
-  reasoning?: ReasoningStep[];
-}
-
-export interface ReasoningStep {
-  id: string;
-  type: "thinking" | "tool_call" | "tool_result" | "file_change";
-  status: "active" | "complete" | "pending";
-  label: string;
-  description?: string;
-  timestamp: string;
-}
-
-export interface CreateProjectRequest {
-  name: string;
-  description?: string;
-  initialPrompt?: string;
-}
-
-export interface ChatRequest {
-  message: string;
-  stream?: boolean;
-}
-
-export interface FileChange {
-  path: string;
-  action: "create" | "update" | "delete";
-  content?: string;
-}
-
-export interface ChatResponse {
-  message: string;
-  changes: FileChange[];
-  previewUrl?: string;
-  status: "success" | "pending_approval" | "error";
-  interrupt?: {
-    type: string;
-    message: string;
-    options: string[];
-  };
-}
-
-export interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: string;
-}
-
-class ApiClient {
-  private baseUrl: string;
-
-  constructor(baseUrl: string = API_BASE) {
-    this.baseUrl = baseUrl;
-  }
-
-  private async fetch<T>(
+export class ApiClient {
+  constructor(private baseUrl = "/api") {}
+  private async request<T>(
     endpoint: string,
-    options?: RequestInit
+    options?: RequestInit,
   ): Promise<ApiResponse<T>> {
-    const url = `${this.baseUrl}${endpoint}`;
-
     try {
-      const response = await fetch(url, {
+      const response = await fetch(`${this.baseUrl}${endpoint}`, {
         ...options,
-        headers: {
-          "Content-Type": "application/json",
-          ...options?.headers,
-        },
+        headers: { "Content-Type": "application/json", ...options?.headers },
       });
-
-      const data = await response.json();
-      return data as ApiResponse<T>;
+      const data = (await response.json()) as ApiResponse<T>;
+      if (!response.ok)
+        return {
+          success: false,
+          error: data.error || `Request failed (${response.status})`,
+        };
+      return data;
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error:
+          error instanceof Error ? error.message : "Unable to reach the server",
       };
     }
   }
-
-  // ==================== Project APIs ====================
-
-  async createProject(
-    request: CreateProjectRequest
-  ): Promise<ApiResponse<Project>> {
-    return this.fetch<Project>("/project", {
+  createProject(request: CreateProjectRequest) {
+    return this.request<Project>("/project", {
       method: "POST",
       body: JSON.stringify(request),
     });
   }
-
-  async getProject(projectId: string): Promise<ApiResponse<Project>> {
-    return this.fetch<Project>(`/project/${projectId}`);
+  getProject(id: string) {
+    return this.request<Project>(`/project/${id}`);
   }
-
-  async getProjects(): Promise<ApiResponse<Project[]>> {
-    return this.fetch<Project[]>("/project");
+  getProjects() {
+    return this.request<Project[]>("/project");
   }
-
-  // ==================== Chat APIs ====================
-
-  async sendMessage(
-    projectId: string,
-    message: string
-  ): Promise<ApiResponse<ChatResponse>> {
-    return this.fetch<ChatResponse>(`/project/${projectId}/chat`, {
-      method: "POST",
-      body: JSON.stringify({ message, stream: false }),
-    });
+  resumeProject(id: string) {
+    return this.request<Project>(`/project/${id}/resume`, { method: "POST" });
+  }
+  getProjectFiles(id: string) {
+    return this.request<string[]>(`/project/${id}/files`);
+  }
+  getFileContent(id: string, path: string) {
+    return this.request<{ path: string; content: string }>(
+      `/project/${id}/file?path=${encodeURIComponent(path)}`,
+    );
+  }
+  exportUrl(id: string) {
+    return `${this.baseUrl}/project/${id}/export`;
   }
 
   async *streamMessage(
-    projectId: string,
-    message: string
-  ): AsyncGenerator<string, void, unknown> {
-    const url = `${this.baseUrl}/project/${projectId}/chat`;
-
-    const response = await fetch(url, {
+    id: string,
+    message: string,
+    options: { initial?: boolean; signal?: AbortSignal } = {},
+  ): AsyncGenerator<StreamEvent> {
+    const response = await fetch(`${this.baseUrl}/project/${id}/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message, stream: true }),
+      body: JSON.stringify({ message, initial: options.initial }),
+      signal: options.signal,
     });
-
     if (!response.ok || !response.body) {
-      throw new Error("Stream failed");
+      const data = (await response.json().catch(() => null)) as {
+        error?: string;
+      } | null;
+      throw new Error(
+        data?.error || `Generation request failed (${response.status})`,
+      );
     }
-
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split("\n");
-
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          const data = line.slice(6);
-          if (data === "[DONE]") return;
-          yield data;
+    let buffer = "";
+    let terminal = false;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += done
+          ? decoder.decode()
+          : decoder.decode(value, { stream: true });
+        let match: RegExpExecArray | null;
+        while ((match = /\r?\n\r?\n/.exec(buffer))) {
+          const frame = buffer.slice(0, match.index);
+          buffer = buffer.slice(match.index + match[0].length);
+          const payload = frame
+            .split(/\r?\n/)
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+          if (!payload) continue;
+          if (payload === "[DONE]") {
+            if (!terminal)
+              throw new Error(
+                "Generation stream interrupted before a result arrived. Retry your request.",
+              );
+            return;
+          }
+          const event = JSON.parse(payload) as StreamEvent;
+          if (!event || typeof event.type !== "string" || !("data" in event))
+            throw new Error("Invalid generation event received");
+          if (terminal) continue;
+          if (event.type === "done" || event.type === "error") terminal = true;
+          yield event;
         }
+        if (done) break;
       }
+      if (!terminal)
+        throw new Error(
+          "Generation stream interrupted. Partial changes may have been saved; retry your request.",
+        );
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
   }
-
-  // ==================== File APIs ====================
-
-  async getProjectFiles(projectId: string): Promise<ApiResponse<string[]>> {
-    return this.fetch<string[]>(`/project/${projectId}/files`);
-  }
-
-  async getFileContent(
-    projectId: string,
-    filePath: string
-  ): Promise<ApiResponse<{ path: string; content: string }>> {
-    return this.fetch<{ path: string; content: string }>(
-      `/project/${projectId}/file?path=${encodeURIComponent(filePath)}`
-    );
-  }
 }
-
-// Export singleton instance
 export const api = new ApiClient();
-
-// Export class for custom instances
-export { ApiClient };

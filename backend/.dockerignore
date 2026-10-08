@@ -1,4 +1,14 @@
 node_modules
-.env
+**/node_modules
+**/node_modules/**
+dist
+**/dist
+**/dist/**
+.env*
+**/.env*
 *.log
+**/*.log
 .git
+**/.git/**
+.data
+**/.data/**

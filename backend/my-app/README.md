@@ -1,73 +1,31 @@
-# React + TypeScript + Vite
+# Likeable generated-app starter
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+The React app copied into new E2B sandboxes. Uses React 19, TypeScript, Vite 7, Tailwind CSS 4 and shadcn preset `b1VlIttI` (Radix Luma, neutral, Inter). Inter is bundled locally, so the starter needs no font CDN.
 
-Currently, two official plugins are available:
+## Run locally
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Use Node.js 24 LTS and run these commands from `backend/my-app/`:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm ci
+npm run dev
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Open `http://localhost:5173`. Local development uses Vite's default WebSocket host/protocol. Leave `VITE_DEV_SERVER_HMR_HOST` unset locally; the builder sets it inside E2B to use the remote HTTPS/WSS proxy on port 443. The development server uses port 5173 in both environments.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Checks and builds
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+| Command | Purpose |
+| --- | --- |
+| `npm run test` | Starter configuration checks |
+| `npm run lint` | ESLint |
+| `npm run build` | TypeScript checks and Vite production build |
+| `npm run preview` | Serve an existing production build locally |
+
+Both npm and Bun lockfiles are checked in. The E2B image uses `npm ci`; keep the lockfiles in sync when changing dependencies.
+
+## Publish a sandbox template
+
+Configure `E2B_API_KEY` in `backend/.env`, then run `bun run template:build` from `backend/`. The remote build installs locked dependencies and builds the starter before publication. Configure the reported template ID in `E2B_TEMPLATE_ID`; the backend starts the development server after creating a sandbox. Rebuild the template to apply starter changes to new sandboxes. See the [backend setup guide](../README.md).
+
+Preserve the CSS `@theme inline` mappings when changing colors; generated components depend on these tokens. The builder's code viewer is read-only; users refine apps through chat or edit exported source locally.

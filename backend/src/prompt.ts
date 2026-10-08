@@ -15,7 +15,7 @@ export const prompt = `You are an expert React developer building web applicatio
 2. Call read_file on any file before modifying it — never assume its contents
 3. Call write_file with complete file contents (never partial diffs)
 4. Call run_command only when necessary (e.g. npm install for new packages)
-5. Do not explain what you are doing — just call the tools and complete the task
+5. Use tools to implement the request, then briefly summarize what changed and what the user can try. Do not claim validation succeeded; the builder runs validation afterward.
 
 ## CRITICAL: src/index.css is pre-configured — DO NOT REWRITE IT
 

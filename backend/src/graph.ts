@@ -1,120 +1,151 @@
-import { createZhipu } from "zhipu-ai-provider";
-import { streamText, generateText, stepCountIs } from "ai";
-import type { ModelMessage, StreamTextResult } from "ai";
+import { createZai } from "@ai-sdk/zai";
+import { streamText, generateText, isStepCount } from "ai";
+import type { LanguageModel, ModelMessage } from "ai";
 import type { Sandbox } from "e2b";
+import type { StreamEvent } from "../../shared/types";
 import { createFileTools } from "./tools";
 import { prompt, planningPrompt } from "./prompt";
+import { BASE_PATH, shellQuote } from "./paths";
+import { waitForPreview } from "./sandbox-files";
+import { runSandboxCommand } from "./commands";
 
-const zai = createZhipu({
-  apiKey: process.env.ZAI_API_KEY ?? "",
-  baseURL: "https://api.z.ai/api/paas/v4",
-});
-
-const model = zai("glm-4.7");
-
-/** Poll the Vite dev server until it responds with HTTP 200 */
-async function waitForDevServer(sandbox: Sandbox, maxAttempts = 10, intervalMs = 500): Promise<boolean> {
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+export function createChatEngine(model: LanguageModel) {
+  return async function* (
+    message: string,
+    _projectId: string,
+    sandbox: Sandbox,
+    history: ModelMessage[],
+    onWrite: (path: string, content: string) => Promise<void>,
+  ): AsyncGenerator<StreamEvent> {
+    yield { type: "thinking", data: { message: "Understanding your request" } };
+    let steps = ["Read the project and implement the requested changes"];
     try {
-      const result = await sandbox.commands.run(
-        'curl -s -o /dev/null -w "%{http_code}" http://localhost:5173',
-        { timeoutMs: 3000 }
-      );
-      if (result.stdout?.trim() === "200") {
-        return true;
-      }
+      const plan = await generateText({
+        model,
+        instructions: planningPrompt,
+        messages: [...history, { role: "user", content: message }],
+        abortSignal: AbortSignal.timeout(60000),
+      });
+      const parsed: unknown = JSON.parse(plan.text);
+      if (
+        Array.isArray(parsed) &&
+        parsed.length > 0 &&
+        parsed.every((item) => typeof item === "string")
+      )
+        steps = parsed.slice(0, 8);
     } catch {
-      // keep polling
+      /* Execution can proceed when planning output is unavailable. */
     }
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
-  }
-  return false;
+    yield { type: "plan", data: steps };
+    try {
+      const result = streamText({
+        model,
+        instructions: prompt,
+        messages: [
+          ...history,
+          {
+            role: "user",
+            content: `${message}\n\nImplementation plan:\n${steps.map((step, index) => `${index + 1}. ${step}`).join("\n")}`,
+          },
+        ],
+        tools: createFileTools(sandbox, onWrite),
+        stopWhen: isStepCount(20),
+        toolChoice: "auto",
+        abortSignal: AbortSignal.timeout(8 * 60 * 1000),
+      });
+      const failedWrites = new Map<string, string>();
+      let text = "";
+      for await (const part of result.stream) {
+        if (part.type === "tool-call") {
+          const input = part.input as { path?: string };
+          if (part.toolName === "write_file")
+            yield {
+              type: "file_start",
+              data: { path: input.path || "unknown" },
+            };
+          else
+            yield {
+              type: "step",
+              data: { toolName: part.toolName, path: input.path },
+            };
+        } else if (
+          part.type === "tool-result" &&
+          part.toolName === "write_file"
+        ) {
+          const output = part.output as {
+            success: boolean;
+            path: string;
+            error?: string;
+          };
+          if (output.success) {
+            failedWrites.delete(output.path);
+            yield {
+              type: "file_complete",
+              data: { path: output.path, action: "update" },
+            };
+          } else
+            failedWrites.set(output.path, output.error || "File write failed");
+        } else if (part.type === "text-delta") {
+          text += part.text;
+          yield { type: "message", data: { text } };
+        } else if (part.type === "error") throw part.error;
+        else if (part.type === "tool-error") throw part.error;
+      }
+      const finishReason = await result.finishReason;
+      if (finishReason !== "stop")
+        throw new Error(
+          `Generation is incomplete (${finishReason}). Changes have been kept; retry with a smaller request to continue.`,
+        );
+      if (failedWrites.size)
+        throw new Error(
+          [...failedWrites]
+            .map(([path, error]) => `${path}: ${error}`)
+            .join("\n"),
+        );
+      yield {
+        type: "validating",
+        data: { message: "Checking the generated app builds" },
+      };
+      const build = await runSandboxCommand(
+        sandbox,
+        `cd ${shellQuote(BASE_PATH)} && npm run build`,
+        120000,
+      );
+      if (build.exitCode !== 0)
+        throw new Error(
+          `Build validation failed. Changes have been kept so you can retry.\n\n${`${build.stdout}\n${build.stderr}`.slice(-8000)}`,
+        );
+      await waitForPreview(sandbox);
+      yield { type: "preview_ready", data: {} };
+      yield {
+        type: "done",
+        data: {
+          text:
+            (await result.finalStep).text.trim() ||
+            "Your changes are ready. The app builds successfully; review the preview and changed files.",
+        },
+      };
+    } catch (error) {
+      yield {
+        type: "error",
+        data: {
+          message: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  };
 }
 
-// Streaming chat — yields SSE-style event objects
-export async function* streamChat(
+export function streamChat(
   message: string,
-  _projectId: string,
+  projectId: string,
   sandbox: Sandbox,
-  history: ModelMessage[]
+  history: ModelMessage[],
+  onWrite: (path: string, content: string) => Promise<void>,
 ) {
-  // Phase 1: Planning
-  yield { type: "thinking", data: { message: "Analyzing your request..." } };
-
-  let steps: string[];
-  try {
-    const planResult = await generateText({
-      model,
-      system: planningPrompt,
-      messages: [{ role: "user", content: message }],
-    });
-    const parsed = JSON.parse(planResult.text);
-    if (!Array.isArray(parsed)) throw new Error("not array");
-    steps = parsed;
-  } catch {
-    steps = ["Implementing your request..."];
-  }
-
-  yield { type: "plan", data: steps };
-
-  // Phase 2: Execution
-  let hasFileChanges = false;
-  const planContext = steps.map((s, i) => `${i + 1}. ${s}`).join("\n");
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let result!: StreamTextResult<any, any>;
-  try {
-    result = streamText({
-      model,
-      system: prompt,
-      messages: [
-        ...history,
-        { role: "user", content: message },
-        { role: "assistant", content: `I'll follow this plan:\n${planContext}` },
-      ],
-      tools: createFileTools(sandbox),
-      stopWhen: stepCountIs(20),
-      toolChoice: "auto",
-    });
-
-    for await (const part of result.fullStream) {
-      if (part.type === "tool-call") {
-        const toolName = part.toolName;
-        const input = part.input as Record<string, unknown>;
-        const path = (input.path as string) ?? null;
-
-        if (toolName === "write_file") {
-          // file_start/file_complete handle write_file — skip generic step to avoid duplication
-          yield { type: "file_start", data: { path } };
-        } else {
-          // Emit structured step for read_file, run_command, list_files
-          yield {
-            type: "step",
-            data: { toolName, path },
-          };
-        }
-      } else if (part.type === "tool-result") {
-        const toolName = part.toolName;
-        const input = part.input as Record<string, unknown>;
-        if (toolName === "write_file") {
-          yield { type: "file_complete", data: { path: input.path, action: "write" } };
-          hasFileChanges = true;
-        }
-      } else if (part.type === "error") {
-        console.error(`[StreamChat] error:`, part.error);
-        yield { type: "error", data: { message: String(part.error) } };
-      }
-    }
-  } catch (error) {
-    console.error(`[StreamChat] Fatal error:`, error);
-    yield { type: "error", data: { message: error instanceof Error ? error.message : String(error) } };
-  }
-
-  const finalText = await result.text;
-  yield { type: "done", data: { text: finalText } };
-
-  if (hasFileChanges) {
-    const isReady = await waitForDevServer(sandbox);
-    if (isReady) yield { type: "preview_ready" };
-  }
+  const model = createZai({
+    apiKey: process.env.ZAI_API_KEY ?? "",
+    baseURL: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
+  })(process.env.ZAI_MODEL || "glm-4.7");
+  return createChatEngine(model)(message, projectId, sandbox, history, onWrite);
 }
