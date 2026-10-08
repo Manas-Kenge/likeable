@@ -1,0 +1,207 @@
+.footer {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  container-type: inline-size;
+  border-top: 1px solid var(--border);
+  color: var(--foreground);
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.footer::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  content: "";
+  pointer-events: none;
+  background: linear-gradient(180deg, var(--background), var(--secondary) 35%);
+  mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent);
+}
+
+.top {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 2rem;
+  width: min(100% - 2.5rem, 75rem);
+  margin-inline: auto;
+  padding-top: clamp(3rem, 6cqw, 5.5rem);
+}
+
+.lede {
+  max-width: 22rem;
+  font-size: clamp(0.875rem, 1.2cqw, 1rem);
+  line-height: 1.6;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.copy {
+  color: var(--muted-foreground);
+}
+
+.link {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75em;
+  min-height: 1.75rem;
+  color: inherit;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.link::after {
+  position: absolute;
+  right: 1.6em;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  content: "";
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: right;
+  transition: transform 200ms ease;
+}
+
+.link svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  transition: transform 200ms ease;
+}
+
+.link:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--ring);
+  outline-offset: 4px;
+}
+
+.link:focus-visible::after {
+  transform: scaleX(1);
+  transform-origin: left;
+}
+
+.fade {
+  transition: opacity 450ms ease, transform 450ms cubic-bezier(0.2, 0.7, 0.1, 1);
+  transition-delay: var(--footer-delay, 0ms);
+}
+
+.wordmark {
+  padding: clamp(2.5rem, 5cqw, 4rem) clamp(1.25rem, 2.6cqw, 2.5rem) clamp(1rem, 2cqw, 2rem);
+}
+
+.svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: hidden;
+  fill: currentColor;
+}
+
+.rise {
+  transition: transform 650ms cubic-bezier(0.16, 0.84, 0.2, 1);
+  transition-delay: var(--footer-delay, 0ms);
+}
+
+.footer[data-motion="true"][data-seen="false"] .fade {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.footer[data-motion="true"][data-seen="false"] .rise {
+  transform: translateY(112px);
+}
+
+.glyph {
+  outline: none;
+}
+
+.footer[data-motion="true"] .glyph {
+  cursor: pointer;
+}
+
+.flip {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.half {
+  transition: transform 300ms cubic-bezier(0.2, 0.9, 0.25, 1.15);
+}
+
+.shutter {
+  fill: var(--primary);
+}
+
+.focusBox {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+  opacity: 0;
+}
+
+.glyph:focus-visible .focusBox {
+  opacity: 1;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .link:hover::after {
+    transform: scaleX(1);
+    transform-origin: left;
+  }
+  .footer[data-motion="true"] .link:hover svg {
+    transform: translateX(3px);
+  }
+  .footer[data-motion="true"] .glyph:hover .up {
+    transform: translate(3px, -1px);
+  }
+  .footer[data-motion="true"] .glyph:hover .down {
+    transform: translate(-3px, 1px);
+  }
+}
+
+@container (max-width: 760px) {
+  .top {
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+  }
+  .lede {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (max-width: 420px) {
+  .top {
+    grid-template-columns: 1fr;
+  }
+  .link {
+    min-height: 2rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fade, .rise, .half, .link svg, .link::after {
+    transition: none;
+  }
+  .footer[data-motion="true"][data-seen="false"] .fade {
+    opacity: 1;
+    transform: none;
+  }
+  .footer[data-motion="true"][data-seen="false"] .rise,
+  .footer[data-motion="true"] .glyph:hover .up,
+  .footer[data-motion="true"] .glyph:hover .down,
+  .footer[data-motion="true"] .link:hover svg {
+    transform: none;
+  }
+}

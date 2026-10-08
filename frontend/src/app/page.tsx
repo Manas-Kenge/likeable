@@ -11,6 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ProjectComposer } from "@/components/project-composer";
 import { ProjectPreview } from "@/components/project-preview";
+import ShutterGlyphFooter from "@/components/ui/shutter-glyph-footer";
 import { api, type Project } from "@/lib/api";
 import styles from "./page.module.css";
 
@@ -188,6 +189,7 @@ export default function HomePage() {
             )}
           </section>
         </main>
+        <ShutterGlyphFooter className={styles.footer} />
       </div>
     </div>
   );
