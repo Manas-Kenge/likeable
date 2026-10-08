@@ -20,7 +20,7 @@ Likeable is a local, single-user React app builder: Next.js proxies to a Bun/Exp
 
 ## Checks
 
-Run backend tests and type checks from `backend/` using its package scripts; run frontend lint and production build from `frontend/`. The HTTP integration test opens a temporary localhost server. AI/E2B transports are fixture-backed in automated tests; real-service verification requires configured keys. The checked-in E2B team/template identifiers are account-specific.
+Run backend tests and type checks from `backend/` using its package scripts; run frontend lint and production build from `frontend/`. The HTTP integration test opens a temporary localhost server. AI/E2B transports are fixture-backed in automated tests; real-service verification requires configured keys and an E2B template accessible to your account.
 
 ## Conventions
 

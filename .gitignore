@@ -1,3 +1,6 @@
 # Locally installed agent skills and temporary design review output
 .agents/skills/
 .design-system/
+
+# Keep internal planning and design notes local.
+/docs/
