@@ -1,5 +1,5 @@
-import { createZhipu } from "zhipu-ai-provider";
-import { streamText, generateText, stepCountIs } from "ai";
+import { createZai } from "@ai-sdk/zai";
+import { streamText, generateText, isStepCount } from "ai";
 import type { LanguageModel, ModelMessage } from "ai";
 import type { Sandbox } from "e2b";
 import type { StreamEvent } from "../../shared/types";
@@ -22,7 +22,7 @@ export function createChatEngine(model: LanguageModel) {
     try {
       const plan = await generateText({
         model,
-        system: planningPrompt,
+        instructions: planningPrompt,
         messages: [...history, { role: "user", content: message }],
         abortSignal: AbortSignal.timeout(60000),
       });
@@ -40,7 +40,7 @@ export function createChatEngine(model: LanguageModel) {
     try {
       const result = streamText({
         model,
-        system: prompt,
+        instructions: prompt,
         messages: [
           ...history,
           {
@@ -49,13 +49,13 @@ export function createChatEngine(model: LanguageModel) {
           },
         ],
         tools: createFileTools(sandbox, onWrite),
-        stopWhen: stepCountIs(20),
+        stopWhen: isStepCount(20),
         toolChoice: "auto",
         abortSignal: AbortSignal.timeout(8 * 60 * 1000),
       });
       const failedWrites = new Map<string, string>();
       let text = "";
-      for await (const part of result.fullStream) {
+      for await (const part of result.stream) {
         if (part.type === "tool-call") {
           const input = part.input as { path?: string };
           if (part.toolName === "write_file")
@@ -121,7 +121,7 @@ export function createChatEngine(model: LanguageModel) {
         type: "done",
         data: {
           text:
-            (await result.text).trim() ||
+            (await result.finalStep).text.trim() ||
             "Your changes are ready. The app builds successfully; review the preview and changed files.",
         },
       };
@@ -143,7 +143,7 @@ export function streamChat(
   history: ModelMessage[],
   onWrite: (path: string, content: string) => Promise<void>,
 ) {
-  const model = createZhipu({
+  const model = createZai({
     apiKey: process.env.ZAI_API_KEY ?? "",
     baseURL: process.env.ZAI_BASE_URL || "https://api.z.ai/api/paas/v4",
   })(process.env.ZAI_MODEL || "glm-4.7");

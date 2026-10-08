@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { createFileTools } from "../src/tools";
 import { sandboxFixture } from "./sandbox-fixture";
-const options = { toolCallId: "write", messages: [] };
+const options = { toolCallId: "write", messages: [], context: {} };
 test("a failed disk write returns a structured failure and does not save a checkpoint", async () => {
   const fixture = sandboxFixture("app");
   fixture.state.failWrites = true;

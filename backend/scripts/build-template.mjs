@@ -2,7 +2,6 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config } from "dotenv";
 import { Template, defaultBuildLogger } from "e2b";
-import { withBufferedTemplateUploads } from "./template-upload.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 config({ path: resolve(root, ".env"), quiet: true });
@@ -16,13 +15,14 @@ const template = Template({ fileContextPath: root }).fromDockerfile(
   resolve(root, "e2b.Dockerfile"),
 );
 try {
-  const result = await withBufferedTemplateUploads(() =>
-    Template.build(template, {
-      alias: process.env.E2B_TEMPLATE_NAME || "likeable-react-dev",
+  const result = await Template.build(
+    template,
+    process.env.E2B_TEMPLATE_NAME || "likeable-react-dev",
+    {
       cpuCount: 2,
       memoryMB: 2048,
       onBuildLogs: defaultBuildLogger(),
-    }),
+    },
   );
   console.log(`Template ready: ${result.templateId}`);
   console.log(`Set E2B_TEMPLATE_ID=${result.templateId} in backend/.env.`);
