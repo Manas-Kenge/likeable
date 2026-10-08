@@ -27,7 +27,7 @@ https://github.com/user-attachments/assets/f7f36797-dd1d-4649-a69b-d97263d7a25a
 └─────────────────┘     └──────────────────────┘     └─────────────────────┘
                                │
                         ┌──────────────┐
-                        │  AI SDK v5   │
+                        │  AI SDK v7   │
                         │  + GLM-4.7   │
                         └──────────────┘
 ```
@@ -43,9 +43,9 @@ https://github.com/user-attachments/assets/f7f36797-dd1d-4649-a69b-d97263d7a25a
 
 | Layer | Technologies |
 |-------|--------------|
-| **Frontend** | Next.js 16, React 19, TailwindCSS, Monaco Editor, Radix UI |
-| **Backend** | Bun, Express 5, AI SDK v5 |
-| **AI** | Z.ai / ZhipuAI GLM-4.7 (via AI SDK v5) |
+| **Frontend** | Next.js 16, React 19, TailwindCSS, assistant-ui, shadcn/Radix UI, Monaco Editor |
+| **Backend** | Bun, Express 5, AI SDK v7 |
+| **AI** | Z.ai GLM-4.7 (official `@ai-sdk/zai` provider) |
 | **Sandbox** | E2B cloud sandboxes with Vite + React |
 
 ## Project Structure
@@ -61,7 +61,6 @@ https://github.com/user-attachments/assets/f7f36797-dd1d-4649-a69b-d97263d7a25a
 │   │   └── tools.ts          # AI tool definitions
 │   ├── my-app/               # Template app for sandboxes
 │   ├── index.ts              # Express server entry point
-│   ├── e2b.toml              # E2B template config
 │   └── e2b.Dockerfile        # Sandbox Docker image
 ├── frontend/
 │   └── src/
@@ -121,7 +120,7 @@ Frontend runs on `http://localhost:3000`
 
 ### 4. E2B Template Access
 
-Your account must have access to the template set in `E2B_TEMPLATE_ID`. The remote build command uses your E2B key and creates the `likeable-react-dev` template; the historical account identifiers in `backend/e2b.toml` are not used. To build the supplied starter, configure `E2B_API_KEY` first, then run:
+Your account must have access to the template set in `E2B_TEMPLATE_ID`. The remote build command uses your E2B key and creates the `likeable-react-dev` template. To build the supplied starter, configure `E2B_API_KEY` first, then run:
 
 ```bash
 cd backend
@@ -159,6 +158,7 @@ Projects are saved in `backend/.data/likeable.sqlite`. Run one backend process p
 | `frontend/` | `npm run dev` | Start frontend dev server |
 | `frontend/` | `npm run build` | Production build |
 | `frontend/` | `npm run lint` | Run ESLint |
+| `frontend/` | `bun run test` | Test assistant-ui adapters and project creation |
 
 ### Code Style
 
