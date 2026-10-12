@@ -2,6 +2,8 @@
 
 A local AI app builder that generates and refines React applications through conversation. Inspect generated source, preview the app in an E2B sandbox, and export it as a ZIP.
 
+https://github.com/user-attachments/assets/4af9f21e-b347-43da-b23f-7131150f938f
+
 ## Features
 
 - Conversational project creation and refinement with assistant-ui.
